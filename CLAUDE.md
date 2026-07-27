@@ -40,7 +40,8 @@ caught locally, but nothing can be *run* here. Two consequences shape everything
   targets plain `net10.0` and **compiles `TextCleaner.cs` in directly** (linked, not
   project-referenced), which is the only executable test on the Mac. Keep that class pure.
 - Everything else is verified in a Parallels VM. `./tests/vm/deploy.sh` builds, deploys and
-  runs the OCR fixtures in one step.
+  runs the OCR fixtures in one step; `./tests/vm/deploy.sh --run` deploys and launches the
+  app itself in the guest's interactive session (`--no-build` skips the publish).
 
 **Read `tests/vm/README.md` before touching the VM.** Driving it has four non-obvious traps
 that each produce a convincing false diagnosis — `prlctl exec` runs as SYSTEM in session 0

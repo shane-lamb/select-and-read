@@ -4,13 +4,20 @@
 # anything involving the overlay, hotkeys or audio has to be relayed through a scheduled
 # task with an Interactive principal. LogonType Interactive needs no stored password.
 #
-# Always pass -Arguments, even empty: New-ScheduledTaskAction fails without it.
+# -Arguments is optional here, but it must never reach New-ScheduledTaskAction empty:
+# that cmdlet rejects both a missing -Argument and an empty one, so it is splatted in
+# only when there is something to pass.
 param([Parameter(Mandatory=$true)][string]$Command,
       [string]$Arguments = "",
       [string]$TaskName  = "SarInteractive",
       [string]$UserId    = "$env:COMPUTERNAME\shane")
 
-$action    = New-ScheduledTaskAction -Execute $Command -Argument $Arguments
+$ErrorActionPreference = 'Stop'
+
+$actionArgs = @{ Execute = $Command }
+if ($Arguments) { $actionArgs.Argument = $Arguments }
+
+$action    = New-ScheduledTaskAction @actionArgs
 $principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive
 Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName

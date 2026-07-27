@@ -37,6 +37,46 @@ csproj), which is useful for compile-checking, though the app itself only runs o
 
 Unsigned binaries trigger a SmartScreen warning on first run: *More info → Run anyway*.
 
+## Deploying to the test VM
+
+Development happens on a Mac, so the app is exercised in a Parallels Windows 11 ARM64 VM.
+One command builds it, pushes it to the guest, and starts it there with its tray icon and
+hotkeys live:
+
+```bash
+./tests/vm/deploy.sh --run
+```
+
+Without `--run` the same command deploys and runs the OCR fixtures instead; `--no-build`
+skips the publish and reuses the existing binary, and combines with either mode:
+
+```bash
+./tests/vm/deploy.sh --no-build --run
+```
+
+Stop it again with:
+
+```bash
+prlctl exec "Windows 11" cmd /c 'taskkill /IM SelectAndRead.exe /F'
+```
+
+**A successful `--run` looks like nothing happened.** The app has no window — it is a tray
+utility, and on a stock Windows 11 taskbar a new tray icon goes into the overflow behind the
+`^` chevron rather than being shown. The single-file exe also takes a few seconds to unpack
+before the process even exists, so an immediate `tasklist` finds nothing. The script waits
+for the process and prints its PID and session, which is the thing to trust; press
+`Ctrl+Shift+F9` in the guest to confirm it is actually listening.
+
+The script expects a running VM named `Windows 11` (override with `VM=...`) with Parallels'
+default folder sharing on; staging goes through `~/Downloads` because that is one of the
+three shared folders. It always kills a stranded `SelectAndRead.exe` before copying, since
+a running binary cannot be overwritten and a leftover overlay contaminates the next capture.
+
+`--run` cannot go through `prlctl exec` directly: that lands in session 0 as SYSTEM, which
+can neither draw nor receive input, so the launch is relayed through a scheduled task with
+an `Interactive` principal. That and three other traps are written up in
+[tests/vm/README.md](tests/vm/README.md) — read it before driving the VM by hand.
+
 ## Status
 
 The core pipeline is **verified working on Windows 11 ARM64** (build 26200): capture,
@@ -77,8 +117,7 @@ SelectAndRead.exe --freeze-to screen.png
 from "the overlay or crop is wrong". `--capture-to` reports *why* a selection was cancelled.
 
 If you have the Parallels VM set up, `./tests/vm/deploy.sh` builds, deploys and runs the
-fixtures in one step. Read [tests/vm/README.md](tests/vm/README.md) first — driving a
-Windows VM from the Mac has several non-obvious traps.
+fixtures in one step — see [Deploying to the test VM](#deploying-to-the-test-vm) above.
 
 `tests/fixtures/` holds OCR images with expected output — see the
 [fixtures README](tests/fixtures/README.md) for how to run them all. Every expectation is

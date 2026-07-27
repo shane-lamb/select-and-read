@@ -7,7 +7,28 @@ clicking around inside the VM. `deploy.sh` is the entry point:
 ./tests/vm/deploy.sh
 ```
 
-That builds `win-arm64`, pushes to the guest, and prints the OCR fixture results.
+That builds `win-arm64`, pushes to the guest, and prints the OCR fixture results. With
+`--run` it starts the app itself in the interactive session instead of running fixtures,
+so the tray icon, hotkeys and audio are live:
+
+```bash
+./tests/vm/deploy.sh --run
+```
+
+`--run` deliberately waits for the process to appear before reporting success. The
+scheduled task returns as soon as it is queued, and the 150 MB single-file exe then spends
+several seconds unpacking, so an immediate `tasklist` shows nothing — and the app itself
+has no window, with its tray icon tucked behind the taskbar's `^` chevron on a stock
+Windows 11. "It didn't start" is almost always one of those two. Check the printed session
+number: session 0 means the interactive relay failed and the app cannot draw.
+
+`--no-build` skips the publish and reuses the existing binary; it combines with `--run`.
+Either mode kills a stranded `SelectAndRead.exe` first — see trap 3 — because a running
+binary also cannot be overwritten by the copy. Stop the app with:
+
+```bash
+prlctl exec "Windows 11" cmd /c 'taskkill /IM SelectAndRead.exe /F'
+```
 
 ## Four things that will waste your afternoon if you don't know them
 
@@ -26,8 +47,9 @@ prlctl exec "Windows 11" powershell -NoProfile -ExecutionPolicy Bypass \
   -Command 'powershell.exe' -Arguments '-NoProfile -WindowStyle Hidden -File C:\sar-test\my-test.ps1'
 ```
 
-Always pass `-Arguments`, even when empty — `New-ScheduledTaskAction` fails without it.
-And always pass `-WindowStyle Hidden` to the driving PowerShell: otherwise its console
+`-Arguments` is optional, but never pass it empty: `New-ScheduledTaskAction` rejects both a
+missing `-Argument` and an empty one, so the script splats it in only when it has a value.
+Always pass `-WindowStyle Hidden` to the driving PowerShell: otherwise its console
 window covers the desktop, and the app faithfully captures **that** instead of your test
 content. A crop full of black with your own script's output in it is this, not a bug.
 
