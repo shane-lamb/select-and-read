@@ -421,6 +421,15 @@ A small WinForms dialog exposes these: a hotkey-capture control, a voice dropdow
 populated from installed voices, a rate slider with a *Test* button, a language dropdown
 from `AvailableRecognizerLanguages`, and checkboxes.
 
+**The dialog must size itself from its content**, using `AutoScaleMode.Font`, auto-sizing
+layout panels and font-relative metrics — never hardcoded pixel bounds. An earlier revision
+positioned every control with absolute `SetBounds` calls; it rendered correctly at the
+default font and broke completely once the user raised the system text size, clipping every
+label to a single character and pushing the buttons off the bottom edge. This is the
+opposite of the overlay's rule in §4.1, which pins raw physical pixels on purpose because
+its coordinates index the freeze frame. Accessibility settings are exactly the conditions a
+read-aloud tool should expect to run under.
+
 *Start with Windows* writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` — no
 elevation required, and per-user, which is correct for a tray utility.
 

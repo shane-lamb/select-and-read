@@ -77,6 +77,14 @@ do not use `Screen.Bounds`/`Screen.AllScreens` for geometry (DPI-context depende
 not let WinForms autoscaling touch the overlay (`AutoScaleMode.None`, positioned by
 `SetWindowPos`, not the `Bounds` property).
 
+**That rule is scoped to the overlay — ordinary dialogs must do the opposite.**
+`SettingsForm` uses `AutoScaleMode.Font`, auto-sizing layout panels and font-relative
+metrics (`Font.Height * n`), never hardcoded pixel bounds. It previously used absolute
+`SetBounds` calls, which looked correct at the default font and became unusable as soon as
+the user raised the system text size: labels clipped to one character, rows overlapping,
+buttons pushed off the client area. Anything with user-visible text needs to size itself
+from its content.
+
 **Per-Monitor-V2 DPI awareness is not multi-monitor code** (SPEC §4). It stays even though
 the app is single-monitor: without a DPI-aware manifest Windows virtualises the process and
 the capture arrives as a blurry upscale, which degrades OCR directly. The manifest owns DPI
