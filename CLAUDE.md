@@ -5,8 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A Windows 10/11 tray utility: press a hotkey, drag a rectangle on screen, and the text
-inside it is OCR'd and read aloud. Fully offline — Windows' own `Windows.Media.Ocr` and
-`Windows.Media.SpeechSynthesis` do the work. C#, WinForms, `net10.0-windows10.0.19041.0`.
+inside it is OCR'd and read aloud.
 
 `SPEC.md` is the design document and carries the reasoning behind every decision below.
 When changing behaviour, update it — several sections record findings measured on real
