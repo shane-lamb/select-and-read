@@ -14,8 +14,6 @@ STAGE="$HOME/Downloads/sar-test"          # must be under a Parallels-shared fol
 GUEST='C:\sar-test'
 PUBLISH="$REPO/bin/Release/net10.0-windows10.0.19041.0/win-arm64/publish"
 
-export PATH="$HOME/.dotnet:$PATH"          # the SDK is not on PATH by default
-
 if [[ "${1:-}" != "--no-build" ]]; then
   echo "==> building win-arm64"
   dotnet publish "$REPO/SelectAndRead.csproj" -c Release -r win-arm64 \
