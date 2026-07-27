@@ -1,0 +1,1 @@
+Dark mode text should read exactly as well as light mode text does.

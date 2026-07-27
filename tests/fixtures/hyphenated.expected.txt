@@ -1,0 +1,1 @@
+Screen readers are particularly interesting when the text has been hyphenated across a line break.

@@ -1,0 +1,1 @@
+The quick brown fox jumps over the lazy dog. Windows optical character recognition is tuned for document scale text, and this paragraph is rendered by Windows itself rather than by an image tool, so it is representative of what the application will actually be pointed at in normal use. Accuracy on this sample is the number that matters.
