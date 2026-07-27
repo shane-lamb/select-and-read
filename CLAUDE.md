@@ -65,6 +65,9 @@ interactive loop, and are the fastest way to diagnose almost anything:
 | `--capture-to <png>` | Overlay + crop; reports *why* a selection was cancelled |
 | `--freeze-to <png>` | Raw capture, no overlay — separates "capture is wrong" from "overlay is wrong" |
 
+`--ocr-file` also reports the measured glyph height and chosen upscale factor on stderr,
+which is the first thing to look at for any "the OCR read it wrong" report.
+
 ## Invariants that will bite you
 
 These are not style preferences. Each was either a real bug found on hardware, or is the
@@ -110,10 +113,13 @@ only way an unfocused overlay can be dismissed at all.
 consuming it, so the foreground app still receives its own key, and it is installed only for
 the duration of playback or the overlay — never process-wide.
 
-**Upscale before OCR** (SPEC §5.2). Measured: with it, real screen text is exact; without
-it, the engine drops leading characters. Only visible on realistic input, which is why
-`tests/fixtures/windows-ui-text.png` (a genuine screen capture) exists alongside the
-synthetic fixtures.
+**Upscale decisions come from measured glyph height, never crop size** (SPEC §5.2).
+Enlarging helps small text and *harms* text the engine already reads cleanly — at 4x a
+desktop icon label's `net10.0` becomes `netl 0.0`. So recognition runs once at native scale,
+takes the median word bounding-box height, and only re-runs enlarged when that is under
+25px. An earlier version scaled by the crop's shorter side, which measures the wrong thing
+entirely. `tests/fixtures/icon-label.png` and `windows-ui-text.png` bracket the crossover
+(27px must not be upscaled; 20px must be) — keep both passing.
 
 **Never enable trimming** on publish — it breaks WinForms reflection over designer types.
 

@@ -134,6 +134,8 @@ Two notes on the defaults:
 - **Function keys** are the defaults deliberately. `Ctrl+Alt+<letter>` collides with AltGr
   on international layouts, and `Ctrl+Shift+<letter>` steals shortcuts that applications
   commonly use.
-- **Upscale before OCR** is on because Windows OCR is tuned for document-scale text and is
-  markedly weaker on the 10–12px UI text this tool is usually pointed at. Turn it off when
-  diagnosing a bad recognition.
+- **Upscale before OCR** is on because Windows OCR is markedly weaker on small UI text. It
+  is not applied blindly: the app measures the actual glyph height first and skips
+  enlargement for text that is already large enough, because upscaling text the engine
+  reads cleanly makes it *worse*. Turn the setting off entirely when diagnosing a bad
+  recognition — `--ocr-file` reports the measured glyph height and chosen scale.

@@ -232,24 +232,41 @@ directing the user to Settings → Time & language → Language & region.
 
 `OcrEngine.AvailableRecognizerLanguages` populates the language dropdown in settings.
 
-### 5.2 Upscaling — the main accuracy lever
+### 5.2 Upscaling — the main accuracy lever, and its limit
 
-Windows OCR is tuned for document-scale text and is noticeably weaker on 10–12 px UI text,
-which is exactly what this tool captures most often. Upscaling the crop before recognition
-is the cheapest accuracy improvement available and is enabled by default.
+Windows OCR is weak on small UI text, so enlarging it before recognition is a large
+accuracy win. But it is **only** a win when the text really is small: enlarging text that
+the engine already reads cleanly makes it worse, because bicubic interpolation smears fine
+detail. The measured failure is a desktop icon label, where 4x turns `net10.0` into
+`netl 0.0` — the digit's flag blurs into a lowercase L.
 
-**Confirmed by measurement** on a real screen capture of Windows-rendered text: with
-upscaling the recognition is exact, character for character; without it the engine drops
-leading characters (`he quick`, `cale text`, `ather than`, `heapplication`). See
-`tests/fixtures/README.md`.
+**The decision is therefore made from measured glyph height, never from the crop's
+dimensions.** Recognition runs once at native scale; the median height of the reported word
+bounding boxes is then used to decide whether a second, enlarged pass is worthwhile.
 
-- Choose an **integer** factor in the range 1×–4× such that the crop's *shorter* side
-  reaches approximately 1000 px.
-- Clamp so that neither dimension exceeds `OcrEngine.MaxImageDimension`.
-- If the crop is below `OcrEngine.MinImageDimension` on either axis, upscale at least
-  enough to clear it — the engine rejects images that are too small.
-- Resample with `InterpolationMode.HighQualityBicubic`.
-- Exposed as a settings toggle so it can be ruled out when diagnosing a bad result.
+An earlier version scaled according to the crop's shorter side, which is simply the wrong
+measurement — a 205x145 capture got 4x whether its glyphs were 8px or 30px. Crop size says
+nothing about text size.
+
+| Median glyph height | Behaviour |
+|---|---|
+| ≥ 25px | Keep the native-scale result; no second pass |
+| < 25px | Re-recognise upscaled towards ~80px, integer factor, capped at 4x |
+| 0 (nothing detected) | Enlarge by the maximum and retry — the text may be too small to see at all |
+
+Both constants are calibrated from measurement rather than chosen:
+
+- **The 25px ceiling** is bracketed by two real cases. A Notepad capture with 20px glyphs is
+  recognised exactly when upscaled and has four errors at native scale. A desktop icon label
+  with 27px glyphs is correct at native scale and wrong when upscaled.
+- **The 80px target** is well above the ceiling on purpose. That same 20px capture is exact
+  at 4x but has three errors at 2x, so text worth enlarging is worth enlarging properly.
+
+Crops below `MinEngineDimension` on either axis are enlarged before any pass, since the
+engine rejects them outright.
+
+The cost is a second recognition pass on small text. Large text now skips the expensive
+upscaled pass entirely, so the common case is no slower than before.
 
 ### 5.3 Bitmap conversion
 

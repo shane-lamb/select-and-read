@@ -26,6 +26,7 @@ for f in *.png; do diff <(SelectAndRead.exe --ocr-file "$f") "${f%.png}.expected
 | Fixture | Source | Result |
 |---|---|---|
 | `windows-ui-text.png` | **Real screen capture** of Notepad, via `--capture-to` | Exact, character for character |
+| `icon-label.png` | **Real screen capture** of a selected desktop icon label | Exact — and must stay so *without* being upscaled |
 | `dark-mode.png` | ImageMagick, 12pt | Exact |
 | `hyphenated.png` | ImageMagick, 13pt | Exact — `TextCleaner` de-hyphenation confirmed against real OCR output |
 | `two-columns.png` | ImageMagick, 12pt | Columns read in order, not interleaved (see below) |
@@ -47,16 +48,20 @@ thin, unhinted glyphs that look nothing like Windows' ClearType output. They are
 deliberate stress case marking roughly where the engine's floor sits — not as a defect to
 be fixed.
 
-**Upscaling is what makes the real capture exact.** Measured on `windows-ui-text.png`:
+**Upscaling cuts both ways, and these two fixtures are what pin the boundary.** Glyph
+heights are reported by `--ocr-file` on stderr.
 
-| Setting | Output |
-|---|---|
-| `UpscaleBeforeOcr: true` | 100% exact |
-| `UpscaleBeforeOcr: false` | `he quick…`, `cale text`, `ather than`, `heapplication` — dropped leading characters |
+| Fixture | Glyph height | Upscaled | Native scale |
+|---|---|---|---|
+| `windows-ui-text.png` | 20px | **exact** | `he quick…`, `cale text`, `ather than`, `heapplication` |
+| `icon-label.png` | 27px | `netl 0.0` — digit `1` smeared into `l` | **exact** |
 
-That is the evidence behind SPEC 5.2. Note that it only shows up on realistic input: on the
-synthetic 11pt fixtures the comparison is muddy, which is exactly why the real capture
-fixture was added.
+That is the evidence behind SPEC 5.2's 25px ceiling: below it upscaling is a clear win,
+above it a clear loss. A change that regresses either fixture has broken the heuristic, so
+run both after touching `OcrService.ChooseScale`.
+
+Note the win only shows up on realistic input — on the synthetic 11pt fixtures the
+comparison is muddy, which is why both real captures were added.
 
 ## Multi-column behaviour is better than the spec first assumed
 

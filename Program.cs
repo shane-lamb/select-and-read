@@ -117,8 +117,11 @@ internal static class Program
         }
 
         using var bitmap = new Bitmap(path);
-        var text = ocr.RecognizeAsync(bitmap, config.UpscaleBeforeOcr).GetAwaiter().GetResult();
+        var (text, info) = ocr.RecognizeDetailedAsync(bitmap, config.UpscaleBeforeOcr)
+                              .GetAwaiter().GetResult();
 
+        Console.Error.WriteLine(
+            $"[glyph height {info.MedianGlyphHeight:0.0}px, scale {info.Scale}x, {info.Words} words]");
         Console.WriteLine(text);
         return string.IsNullOrWhiteSpace(text) ? 1 : 0;
     }
