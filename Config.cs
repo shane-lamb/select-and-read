@@ -37,7 +37,7 @@ internal sealed class Config
     public string CloudPrompt { get; set; } = DefaultCloudPrompt;
 
     internal const string DefaultCloudModel = "gpt-realtime-2.1-mini";
-    internal const string DefaultCloudVoice = "marin";
+    internal const string DefaultCloudVoice = "cedar";
 
     /// <summary>
     /// Steers the model towards transcription rather than description. Without an explicit
@@ -46,8 +46,8 @@ internal sealed class Config
     /// </summary>
     internal const string DefaultCloudPrompt =
         "Read the text in this image aloud, verbatim and in natural reading order. " +
-        "Skip window chrome, menus, toolbars and UI controls. " +
         "Do not summarise, describe the image, or add commentary of your own. " +
+        "Start reading right away - don't add an introduction. " +
         "If there is no readable text, say only \"No text found.\"";
 
     [JsonIgnore]
