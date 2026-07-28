@@ -468,13 +468,18 @@ Per-Monitor-V2 DPI awareness and long-path awareness.
 | `OcrService.cs` | Upscale, `SoftwareBitmap` conversion, recognition |
 | `TextCleaner.cs` | Pure functions: joining, de-hyphenation, junk stripping |
 | `SpeechService.cs` | Synthesiser + `MediaPlayer`, voice, rate, stop |
+| `ReadingEngine.cs` | `IReadingEngine` seam + `LocalReadingEngine` (OCR → cleanup → speech) |
+| `RealtimeProtocol.cs` | Pure functions: Realtime frame construction and parsing (§14.2) |
+| `RealtimeClient` (in `RealtimeReadingEngine.cs`) | WebSocket transport, fallback policy |
+| `RealtimeAudioPlayer.cs` | `MediaStreamSource` fed from a channel — plays PCM as it arrives |
+| `ApiKeyStore.cs` | DPAPI-encrypted API key, kept out of `config.json` |
 | `EscapeWatcher.cs` | Scoped, non-swallowing low-level keyboard hook |
 | `Config.cs` | JSON load/save, defaults, Run-key registration |
 | `SettingsForm.cs` | Settings dialog |
 | `Native.cs` | All P/Invoke declarations |
 
-`TextCleaner` is deliberately pure so that the fiddliest text logic is testable without
-any Windows API surface.
+`TextCleaner` and `RealtimeProtocol` are deliberately pure so that the fiddliest logic —
+text normalisation and wire-format handling — is testable without any Windows API surface.
 
 ---
 
@@ -505,14 +510,16 @@ code signing is out of scope for v1.
 
 ### 12.2 Debug CLI modes
 
-`Program.cs` supports three non-interactive modes so the risky logic can be exercised
+`Program.cs` supports five non-interactive modes so the risky logic can be exercised
 without the full interactive loop:
 
 | Mode | Behaviour |
 |---|---|
 | `--ocr-file <png>` | Print cleaned OCR text for an image to stdout |
+| `--read-file <png>` | Read an image via the cloud engine; report latency and token usage |
 | `--speak "<text>"` | Speak the text and exit |
 | `--capture-to <png>` | Run the overlay, write the crop to disk, exit |
+| `--freeze-to <png>` | Save the raw freeze frame with no overlay involved |
 
 These exist primarily for verification (§13) but are also the fastest way to diagnose a
 user-reported bad recognition.
@@ -589,10 +596,104 @@ manual checklist:
 - Clipboard contents after a capture.
 - Protected/DRM content capturing black (§3.1).
 - Whether first-word latency meets the ~700 ms target (§7.4).
+- **The entire cloud reading engine (§14).** Nothing below the wire format has run: the
+  `RealtimeProtocol` unit tests cover frame construction and parsing, but the WebSocket
+  transport, `MediaStreamSource` playback, the DPAPI key store and the fallback policy are
+  all unexercised. `--read-file` is the way in.
+- Whether `MediaStreamSource` streams PCM cleanly on ARM64 without underruns (§14.3).
 
 ---
 
-## 14. Open questions
+## 14. Cloud reading engine
+
+### 14.1 Why, and why it is opt-in
+
+Windows OCR is the accuracy ceiling of the local pipeline: it is weak on small text (§5.2),
+reorders multi-column content (§6.1), and has no way to tell body text from window chrome.
+A vision-language model that accepts the crop and returns speech directly removes both that
+ceiling and the sequential recognise-then-synthesise latency of §7.4, because audio starts
+arriving before the model has finished reading.
+
+It is **off by default and gated on an API key**. Enabling it changes three properties the
+app otherwise guarantees — readings are free, work offline, and never leave the machine —
+and none of those should change without the user asking. The local pipeline remains the
+default and the fallback.
+
+**Chosen model: `gpt-realtime-2.1-mini`.** It is the cheapest model that accepts image
+input *and* emits streaming audio. Anthropic was evaluated and cannot serve this at all:
+every Claude model is text+image in, **text out**, with no audio output anywhere on the
+Messages API. `gpt-audio` was rejected for the mirror-image reason — audio out, but text
+and audio in only, so it cannot take the crop.
+
+Estimated cost is roughly **$0.017 per reading** (~500 image tokens, ~250 text in, ~800
+audio out at $0.80/$0.60/$20.00 per MTok). This is an estimate, not a measurement: the
+image-token figure in particular is inferred. `--read-file` reports real `usage` and should
+be used to replace it.
+
+### 14.2 Wire format
+
+One WebSocket per reading to `wss://api.openai.com/v1/realtime?model=…`, authenticated with
+a bearer token. The session is configured for `output_modalities: ["audio"]`, PCM at 24 kHz
+mono, and **turn detection disabled** — the app never sends microphone audio, and server VAD
+left on makes the model wait for speech that never arrives. Then one
+`conversation.item.create` carrying the crop as a `data:image/png;base64,…` URI followed by
+the reading prompt, and one `response.create`.
+
+Frame construction and parsing live in `RealtimeProtocol`, which is pure and free of both
+sockets and Windows APIs — the same discipline as `TextCleaner`, for the same reason, and it
+makes the wire format the only part of this feature testable off the VM.
+
+Two parsing rules are load-bearing:
+
+- **Unknown event types are ignored, not errors.** The Realtime API emits many events this
+  client has no use for and adds new ones over time; treating them as failures would break
+  the app on a server-side addition.
+- **`response.done` is not automatically success.** A response cut short by a content filter
+  or an incomplete turn arrives as `response.done` with a non-completed `status`. Treating
+  every `response.done` as completion would truncate the reading silently and report nothing.
+
+### 14.3 Streaming playback
+
+`SpeechService` cannot be reused: it synthesises a whole utterance to a stream and hands the
+finished stream to `MediaPlayer`, which is precisely the full-utterance latency this engine
+exists to remove. Instead a `MediaStreamSource` with `AudioEncodingProperties.CreatePcm` is
+pulled on demand from an unbounded channel, so playback starts on the first chunk.
+
+`MediaStreamSource` is chosen over `AudioGraph` because it needs no `unsafe` code and no
+`IMemoryBufferByteAccess` interop, and because it preserves the `MediaPlayer` configuration
+§7 already settled: `AudioCategory.Speech` for correct OS ducking, and `CommandManager`
+disabled so the app does not hijack the media keys.
+
+`byte[]` reaches WinRT as an `IBuffer` via `DataWriter`, **not** `AsBuffer()` — the same
+choice, and the same reason, as the conversion in §5.3.
+
+Leaving `request.Sample` null is how `MediaStreamSource` is told the stream has ended; there
+is no separate "finished" call. That null path is therefore the normal end of every reading,
+not an error path.
+
+### 14.4 Failure and fallback
+
+A cloud failure falls back to the local engine, **but only if nothing was spoken yet**.
+Once audio has started, restarting the page from the top would be more disruptive than the
+truncation, so the failure is reported instead. `RealtimeException.Spoke` carries that
+distinction.
+
+A superseded capture neither reports nor falls back: the balloon would be stale, and the
+local reading would talk over the selection the user has since started.
+
+### 14.5 Key storage
+
+The API key lives in `%APPDATA%\SelectAndRead\apikey.dat`, DPAPI-encrypted at
+`CurrentUser` scope — **not** in `config.json`, which is plain text the user is expected to
+open and edit, and which is the wrong place for a token that grants spend on their account.
+
+This is obfuscation against casual disclosure, not a secret store: any code running as the
+user can call `Unprotect` exactly as the app does. That is the same guarantee the browsers'
+saved-password stores offer, and the right level for a tray utility.
+
+---
+
+## 15. Open questions
 
 | Question | Status |
 |---|---|
@@ -601,3 +702,6 @@ manual checklist:
 | How does the engine order multi-column text? | **Resolved:** by column, not interleaved line by line as originally predicted (§6.1). |
 | Does time-to-first-word need chunked synthesis? | **Open.** Not yet measured end to end. §7.4 ships the simple path behind an interface so chunking drops in later without redesign. |
 | Is the coordinate handling correct on a scaled display? | **Open, and the biggest remaining risk.** Proven pixel-exact at 100%; untested at 125%/150%/200%. See §13.4. |
+| Can a vision-language model replace OCR *and* synthesis in one call? | **Resolved: yes, on OpenAI only.** `gpt-realtime-2.1-mini` takes an image and streams audio back (§14.1). No Anthropic model can — every Claude model is text out only. |
+| What does a cloud reading actually cost? | **Open.** Estimated at ~$0.017 (§14.1) from inferred image-token counts. `--read-file` prints real `usage`; replace the estimate with measurement. |
+| Does `MediaStreamSource` stream PCM cleanly on ARM64? | **Open.** The highest-risk untested piece of §14.3; underruns or clicks would show up here first. |

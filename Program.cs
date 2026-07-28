@@ -82,6 +82,9 @@ internal static class Program
                 case "--ocr-file" when args.Length >= 2:
                     return OcrFile(args[1], config);
 
+                case "--read-file" when args.Length >= 2:
+                    return ReadFile(args[1], config);
+
                 case "--speak" when args.Length >= 2:
                     return Speak(args[1], config);
 
@@ -95,8 +98,10 @@ internal static class Program
                     Console.Error.WriteLine(
                         "Usage:\n" +
                         "  SelectAndRead --ocr-file <image.png>   print recognised text\n" +
+                        "  SelectAndRead --read-file <image.png>  read it via the cloud engine\n" +
                         "  SelectAndRead --speak \"<text>\"         speak text and exit\n" +
-                        "  SelectAndRead --capture-to <out.png>   select a region, save it");
+                        "  SelectAndRead --capture-to <out.png>   select a region, save it\n" +
+                        "  SelectAndRead --freeze-to <out.png>    save the raw freeze frame");
                     return 2;
             }
         }
@@ -122,6 +127,62 @@ internal static class Program
 
         Console.Error.WriteLine(
             $"[glyph height {info.MedianGlyphHeight:0.0}px, scale {info.Scale}x, {info.Words} words]");
+        Console.WriteLine(text);
+        return string.IsNullOrWhiteSpace(text) ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Runs the cloud engine against a fixture. The analogue of --ocr-file: that mode
+    /// reports the glyph height and scale it chose because "the OCR was wrong" is not
+    /// actionable without them, and this one reports time-to-first-audio and token usage
+    /// for the same reason - "it was slow" and "it was expensive" are not actionable
+    /// without measurements, and the usage figures are the only way to replace the
+    /// estimated per-reading cost with a real one.
+    /// </summary>
+    private static int ReadFile(string path, Config config)
+    {
+        var key = ApiKeyStore.Load();
+        if (key is null)
+        {
+            Console.Error.WriteLine(
+                "No API key is configured. Enter one in Settings, or run the app once to create it.");
+            return 3;
+        }
+
+        using var engine = new RealtimeReadingEngine(key);
+        engine.ApplySettings(config);
+
+        using var bitmap = new Bitmap(path);
+
+        string? text;
+        RealtimeReadingEngine.Diagnostics info;
+        try
+        {
+            (text, info) = engine.ReadDetailedAsync(bitmap, CancellationToken.None)
+                                 .GetAwaiter().GetResult();
+        }
+        catch (RealtimeException ex)
+        {
+            Console.Error.WriteLine($"[failed after speaking: {ex.Spoke}] {ex.Message}");
+            return 3;
+        }
+
+        Console.Error.WriteLine(
+            $"[first audio {info.TimeToFirstAudio.TotalMilliseconds:0}ms, " +
+            $"total {info.Total.TotalMilliseconds:0}ms]");
+
+        if (info.Usage is { } usage)
+        {
+            Console.Error.WriteLine(
+                $"[tokens in: {usage.InputText} text, {usage.InputImage} image, " +
+                $"{usage.InputCached} cached | out: {usage.OutputText} text, " +
+                $"{usage.OutputAudio} audio | total {usage.Total}]");
+        }
+        else
+        {
+            Console.Error.WriteLine("[no usage reported by the server]");
+        }
+
         Console.WriteLine(text);
         return string.IsNullOrWhiteSpace(text) ? 1 : 0;
     }

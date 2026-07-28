@@ -23,6 +23,33 @@ internal sealed class Config
     public bool CopyToClipboard { get; set; } = true;
     public bool StartWithWindows { get; set; }
 
+    // --- Cloud reading engine (SPEC 14) -----------------------------------------
+    // Opt-in and off by default: the local path is free, offline and private, and none of
+    // that should change without the user asking. The API key itself lives in ApiKeyStore,
+    // not here.
+
+    public bool UseCloudEngine { get; set; }
+
+    public string CloudModel { get; set; } = DefaultCloudModel;
+
+    public string CloudVoice { get; set; } = DefaultCloudVoice;
+
+    public string CloudPrompt { get; set; } = DefaultCloudPrompt;
+
+    internal const string DefaultCloudModel = "gpt-realtime-2.1-mini";
+    internal const string DefaultCloudVoice = "marin";
+
+    /// <summary>
+    /// Steers the model towards transcription rather than description. Without an explicit
+    /// instruction a realtime model will happily narrate ("This looks like a settings
+    /// window showing...") instead of reading, which is not what the app is for.
+    /// </summary>
+    internal const string DefaultCloudPrompt =
+        "Read the text in this image aloud, verbatim and in natural reading order. " +
+        "Skip window chrome, menus, toolbars and UI controls. " +
+        "Do not summarise, describe the image, or add commentary of your own. " +
+        "If there is no readable text, say only \"No text found.\"";
+
     [JsonIgnore]
     public Hotkey Capture => Hotkey.ParseOrDefault(CaptureHotkey, Hotkey.DefaultCapture);
 

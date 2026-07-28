@@ -30,7 +30,7 @@ binary also cannot be overwritten by the copy. Stop the app with:
 prlctl exec "Windows 11" cmd /c 'taskkill /IM SelectAndRead.exe /F'
 ```
 
-## Four things that will waste your afternoon if you don't know them
+## Five things that will waste your afternoon if you don't know them
 
 These were all learned the hard way during bring-up. None are obvious, and each produced a
 convincing false diagnosis first.
@@ -71,6 +71,21 @@ prlctl exec "Windows 11" cmd /c 'taskkill /IM SelectAndRead.exe /F'
 `net use` belongs to the interactive user and is not visible to SYSTEM. Use `robocopy`
 rather than `copy` — `copy` with a wildcard against the share fails with a confusing
 "cannot find the path specified".
+
+**5. `--read-file` will never see the key you saved in Settings.** The API key is DPAPI
+encrypted at `CurrentUser` scope and stored under `%APPDATA%`, and per trap 1 `prlctl exec`
+runs as SYSTEM with *its own* `%APPDATA%` — so a key entered in the GUI (interactive user)
+cannot be found or decrypted by a `prlctl exec` run, and vice versa. Both halves of that
+fail identically and silently:
+
+```
+No API key is configured. Enter one in Settings, or run the app once to create it.
+```
+
+That message is usually the session mismatch, not a missing key. To exercise the cloud path
+end to end, drive it through `launch-interactive.ps1` so it runs as the logged-on user —
+the same reason the overlay and hotkeys need it. There is deliberately no CLI flag to pass a
+key in: it would end up in shell history and in the scheduled-task command line.
 
 ## Driving mouse input
 

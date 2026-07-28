@@ -36,9 +36,12 @@ dotnet publish -c Release -r win-arm64 --self-contained -p:PublishSingleFile=tru
 Builds work on macOS via `EnableWindowsTargeting` in the csproj, so compile errors are
 caught locally, but nothing can be *run* here. Two consequences shape everything:
 
-- `TextCleaner` is deliberately pure and free of Windows APIs. `tests/TextCleaner.Tests`
-  targets plain `net10.0` and **compiles `TextCleaner.cs` in directly** (linked, not
-  project-referenced), which is the only executable test on the Mac. Keep that class pure.
+- `TextCleaner` and `RealtimeProtocol` are deliberately pure and free of Windows APIs.
+  `tests/TextCleaner.Tests` and `tests/RealtimeProtocol.Tests` target plain `net10.0` and
+  **compile those files in directly** (linked, not project-referenced), which are the only
+  executable tests on the Mac. Keep both classes pure — `RealtimeProtocol` in particular
+  must not gain a socket or a `Config` dependency (`Config` touches the registry, so
+  depending on it would break the link).
 - Everything else is verified in a Parallels VM. `./tests/vm/deploy.sh` builds, deploys and
   runs the OCR fixtures in one step; `./tests/vm/deploy.sh --run` deploys and launches the
   app itself in the guest's interactive session (`--no-build` skips the publish).
@@ -65,9 +68,13 @@ interactive loop, and are the fastest way to diagnose almost anything:
 | `--speak "<text>"` | Speech path |
 | `--capture-to <png>` | Overlay + crop; reports *why* a selection was cancelled |
 | `--freeze-to <png>` | Raw capture, no overlay — separates "capture is wrong" from "overlay is wrong" |
+| `--read-file <png>` | Cloud reading engine against a fixture; reports latency and token usage |
 
 `--ocr-file` also reports the measured glyph height and chosen upscale factor on stderr,
-which is the first thing to look at for any "the OCR read it wrong" report.
+which is the first thing to look at for any "the OCR read it wrong" report. `--read-file` is
+its cloud counterpart and reports time-to-first-audio and token usage — the only way to turn
+"it was slow" or "it was expensive" into a number, and the way to replace SPEC §14.1's
+estimated per-reading cost with a measured one.
 
 ## Invariants that will bite you
 
@@ -121,6 +128,27 @@ takes the median word bounding-box height, and only re-runs enlarged when that i
 25px. An earlier version scaled by the crop's shorter side, which measures the wrong thing
 entirely. `tests/fixtures/icon-label.png` and `windows-ui-text.png` bracket the crossover
 (27px must not be upscaled; 20px must be) — keep both passing.
+
+**The cloud engine is opt-in, and local is the fallback** (SPEC §14.1). Enabling it changes
+three properties the app otherwise guarantees — readings are free, work offline, and never
+leave the machine. `LocalReadingEngine` always exists, and a cloud failure falls back to it
+**only when nothing has been spoken yet**: once audio has started, restarting the page from
+the top is worse than the truncation, which is what `RealtimeException.Spoke` encodes.
+
+**Two Realtime parsing rules are load-bearing** (SPEC §14.2). Unknown event types must be
+ignored rather than treated as errors, or a server-side addition breaks the app. And
+`response.done` is *not* automatically success — a filtered or incomplete response arrives
+that way too, so checking `status` is what stops a truncated reading from being reported as
+a clean one.
+
+**The API key never goes in `config.json`** (SPEC §14.5). That file is plain text the user is
+expected to edit; the key lives DPAPI-encrypted in `apikey.dat` beside it, and `SettingsForm`
+surfaces it via its own `ApiKey` property rather than through `Config`.
+
+**Freeze-frame scoping in `RunPipelineAsync` is load-bearing, not tidiness.** The frame is
+tens of megabytes at 4K, so it is scoped to an inner block that ends the moment the crop
+exists. A method-scoped `using` there compiles and works, and silently pins a full screenshot
+in memory for the duration of every reading.
 
 **Never enable trimming** on publish — it breaks WinForms reflection over designer types.
 

@@ -26,12 +26,24 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox _clipboard = new();
     private readonly CheckBox _startWithWindows = new();
 
+    private readonly CheckBox _useCloud = new();
+    private readonly TextBox _apiKey = new();
+    private readonly ComboBox _cloudModel = new();
+    private readonly TextBox _cloudVoice = new();
+    private readonly TextBox _cloudPrompt = new();
+
     private readonly TableLayoutPanel _grid = new();
     private readonly int _inputWidth;
     private readonly int _pad;
 
     /// <summary>Populated when the dialog returns OK.</summary>
     internal Config Result { get; private set; }
+
+    /// <summary>
+    /// The API key as typed, for the caller to hand to ApiKeyStore. Kept off Config on
+    /// purpose - Config is serialised to plain-text config.json.
+    /// </summary>
+    internal string? ApiKey { get; private set; }
 
     internal SettingsForm(Config config)
     {
@@ -80,6 +92,8 @@ internal sealed class SettingsForm : Form
         AddCheck(_upscale, "Upscale small text before OCR (improves accuracy)", config.UpscaleBeforeOcr);
         AddCheck(_clipboard, "Copy recognised text to the clipboard", config.CopyToClipboard);
         AddCheck(_startWithWindows, "Start with Windows", Config.IsStartWithWindowsEnabled());
+
+        BuildCloudControls(config);
 
         AddButtons();
         Controls.Add(_grid);
@@ -191,7 +205,11 @@ internal sealed class SettingsForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Margin = new Padding(_pad, 0, 0, 0),
         };
-        ok.Click += (_, _) => Result = Compose();
+        ok.Click += (_, _) =>
+        {
+            Result = Compose();
+            ApiKey = _apiKey.Text;
+        };
 
         var cancel = new Button
         {
@@ -258,6 +276,94 @@ internal sealed class SettingsForm : Form
         }
     }
 
+    /// <summary>
+    /// The cloud reading engine (SPEC 14). Presented last and behind an explicit opt-in,
+    /// because enabling it changes three properties the app otherwise guarantees: readings
+    /// stop being free, stop working offline, and stop staying on the machine.
+    /// </summary>
+    private void BuildCloudControls(Config config)
+    {
+        AddSeparator();
+
+        AddCheck(_useCloud, "Read with a cloud model instead of local OCR", config.UseCloudEngine);
+        AddHint("Sends the selected area to OpenAI and plays the speech it streams back. " +
+                "More accurate on small text, tables and columns, and starts speaking sooner. " +
+                "Costs roughly 2 cents per reading and needs an internet connection. " +
+                "Falls back to local reading if the call fails.");
+
+        _apiKey.UseSystemPasswordChar = true;
+        _apiKey.Text = ApiKeyStore.Load() ?? string.Empty;
+        AddRow("OpenAI API key", _apiKey);
+
+        _cloudModel.DropDownStyle = ComboBoxStyle.DropDownList;
+        _cloudModel.Items.Add(new ModelItem(
+            "gpt-realtime-2.1-mini", "gpt-realtime-2.1-mini (about 2c a reading)"));
+        _cloudModel.Items.Add(new ModelItem(
+            "gpt-realtime-2.1", "gpt-realtime-2.1 (about 6c a reading)"));
+        SelectModel(config.CloudModel);
+        AddRow("Model", _cloudModel);
+
+        _cloudVoice.Text = string.IsNullOrWhiteSpace(config.CloudVoice)
+            ? Config.DefaultCloudVoice
+            : config.CloudVoice;
+        AddRow("Cloud voice", _cloudVoice);
+
+        // Multi-line and tall enough to show the default prompt without scrolling. Height
+        // is font-relative like every other metric here, so it grows with the system text
+        // size rather than clipping to one line.
+        _cloudPrompt.Multiline = true;
+        _cloudPrompt.ScrollBars = ScrollBars.Vertical;
+        _cloudPrompt.Height = Font.Height * 5;
+        _cloudPrompt.Text = string.IsNullOrWhiteSpace(config.CloudPrompt)
+            ? Config.DefaultCloudPrompt
+            : config.CloudPrompt;
+        AddRow("Reading prompt", _cloudPrompt);
+        AddHint("What to tell the model. The default asks it to read verbatim; change it to " +
+                "summarise, translate, or describe images instead.");
+
+        _useCloud.CheckedChanged += (_, _) => UpdateCloudEnabled();
+        UpdateCloudEnabled();
+    }
+
+    private void SelectModel(string? id)
+    {
+        _cloudModel.SelectedIndex = 0;
+        foreach (var item in _cloudModel.Items)
+        {
+            if (item is ModelItem model && model.Id == id)
+            {
+                _cloudModel.SelectedItem = item;
+                return;
+            }
+        }
+    }
+
+    /// <summary>Greys the cloud fields out rather than hiding them, so the dialog does not
+    /// resize as the checkbox is toggled.</summary>
+    private void UpdateCloudEnabled()
+    {
+        _apiKey.Enabled = _useCloud.Checked;
+        _cloudModel.Enabled = _useCloud.Checked;
+        _cloudVoice.Enabled = _useCloud.Checked;
+        _cloudPrompt.Enabled = _useCloud.Checked;
+    }
+
+    private void AddSeparator()
+    {
+        var rule = new Label
+        {
+            AutoSize = false,
+            BorderStyle = BorderStyle.Fixed3D,
+            Height = 2,
+            Margin = new Padding(0, _pad, 0, _pad),
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
+        };
+
+        _grid.Controls.Add(rule, 0, _grid.RowCount);
+        _grid.SetColumnSpan(rule, 2);
+        _grid.RowCount++;
+    }
+
     private void BuildRateControls(Config config)
     {
         // TrackBar is integral, so the 0.5-6.0 range is held as tenths.
@@ -301,12 +407,21 @@ internal sealed class SettingsForm : Form
         UpscaleBeforeOcr = _upscale.Checked,
         CopyToClipboard = _clipboard.Checked,
         StartWithWindows = _startWithWindows.Checked,
+        UseCloudEngine = _useCloud.Checked,
+        CloudModel = (_cloudModel.SelectedItem as ModelItem)?.Id ?? Config.DefaultCloudModel,
+        CloudVoice = _cloudVoice.Text,
+        CloudPrompt = _cloudPrompt.Text,
     };
 
     private const string AutomaticLanguage = "(automatic)";
     private const string AutomaticVoice = "(best available)";
 
     private sealed record VoiceItem(string Id, string Display)
+    {
+        public override string ToString() => Display;
+    }
+
+    private sealed record ModelItem(string Id, string Display)
     {
         public override string ToString() => Display;
     }

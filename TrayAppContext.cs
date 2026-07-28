@@ -12,12 +12,15 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly NotifyIcon _tray;
     private readonly Icon _icon;
     private readonly HotkeyManager _hotkeys = new();
-    private readonly SpeechService _speech = new();
+    private readonly LocalReadingEngine _local = new();
     private readonly EscapeWatcher _escape = new();
     private readonly ToolStripMenuItem _stopItem;
 
     private Config _config;
-    private OcrService? _ocr;
+
+    /// <summary>Non-null only while the cloud engine is enabled and a key is configured.</summary>
+    private RealtimeReadingEngine? _cloud;
+
     private State _state = State.Idle;
 
     /// <summary>
@@ -58,10 +61,32 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkeys.StopPressed += StopSpeaking;
         _escape.EscapePressed += StopSpeaking;
 
-        _speech.ApplySettings(_config);
+        ApplyEngineSettings();
         RegisterHotkeys();
         UpdateTooltip();
     }
+
+    // --- Engine selection (SPEC 14.1) -------------------------------------------
+
+    /// <summary>
+    /// Rebuilds the cloud engine to match the current config, and pushes settings into
+    /// both engines. The local engine always exists: it is the default, and it is the
+    /// fallback when a cloud reading fails.
+    /// </summary>
+    private void ApplyEngineSettings()
+    {
+        _local.ApplySettings(_config);
+
+        var key = _config.UseCloudEngine ? ApiKeyStore.Load() : null;
+
+        // Rebuilt unconditionally rather than reused: the key is immutable in the engine,
+        // so a reused instance would keep authenticating with the old one after the user
+        // pastes a new key. Construction is trivial here, unlike OcrService.
+        _cloud?.Dispose();
+        _cloud = key is null ? null : new RealtimeReadingEngine(key);
+        _cloud?.ApplySettings(_config);
+    }
+
 
     // --- Hotkeys ----------------------------------------------------------------
 
@@ -125,70 +150,104 @@ internal sealed class TrayAppContext : ApplicationContext
         }
     }
 
-    private async Task RunPipelineAsync(int operationId)
-    {
-        var utterance = await RecognizeSelectionAsync();
-        if (utterance is null) return;              // cancelled
-
-        await SpeakAsync(utterance, operationId);
-    }
-
     /// <summary>
-    /// Select, capture and recognise. Returns the text to speak, or null if the user
-    /// cancelled.
+    /// Select, capture, then read aloud.
     ///
-    /// Kept separate from speaking so the freeze frame - tens of megabytes at 4K - is
-    /// released before playback starts, rather than being held alive for the whole
-    /// reading.
+    /// The freeze frame - tens of megabytes at 4K - is scoped to the block below and
+    /// released as soon as the crop exists, rather than being held alive for the whole
+    /// reading. That scoping is load-bearing, not tidiness: it is the reason the original
+    /// code split selection from playback across two methods, and a plain method-scoped
+    /// `using` here would silently pin a full screenshot in memory for the duration of
+    /// every reading.
     /// </summary>
-    private async Task<string?> RecognizeSelectionAsync()
+    private async Task RunPipelineAsync(int operationId)
     {
         _state = State.Selecting;
 
         var screen = ScreenCapture.GetScreenSize();
 
-        // SPEC 2.2: freeze frame first, so the overlay can never contaminate the capture.
-        using var frame = ScreenCapture.CaptureScreen(screen);
-
-        Rectangle? selection;
-        using (var overlay = new SelectionOverlay(frame, screen))
+        Bitmap crop;
+        using (var frame = ScreenCapture.CaptureScreen(screen))
         {
-            overlay.ShowDialog();
-            selection = overlay.Selection;
+            // SPEC 2.2: freeze frame first, so the overlay can never contaminate the capture.
+            Rectangle? selection;
+            using (var overlay = new SelectionOverlay(frame, screen))
+            {
+                overlay.ShowDialog();
+                selection = overlay.Selection;
+            }
+
+            if (selection is null)
+            {
+                _state = State.Idle;
+                return;                             // cancelled
+            }
+
+            _state = State.Working;
+            crop = ScreenCapture.Crop(frame, selection.Value);
         }
 
-        if (selection is null)
+        using var _ = crop;
+
+        // Almost always protected/DRM content, which captures as solid black. Caught here
+        // rather than in an engine: it is a property of the capture, and sending a black
+        // rectangle to a paid API would be a waste.
+        if (ScreenCapture.LooksBlank(crop))
         {
-            _state = State.Idle;
-            return null;
+            await InSpeakingStateAsync(
+                () => _local.SpeakStatusAsync("Capture failed.", CancellationToken.None),
+                operationId);
+            return;
         }
 
-        _state = State.Working;
-
-        using var crop = ScreenCapture.Crop(frame, selection.Value);
-
-        // Almost always protected/DRM content, which captures as solid black.
-        if (ScreenCapture.LooksBlank(crop)) return "Capture failed.";
-
-        _ocr ??= OcrService.Create(_config.OcrLanguage);
-        if (_ocr is null)
-        {
-            return "No text recognition language is installed. " +
-                   "Add one in Settings, under Time and language.";
-        }
-
-        var text = await _ocr.RecognizeAsync(crop, _config.UpscaleBeforeOcr);
-
-        if (string.IsNullOrWhiteSpace(text)) return "No text found.";
-
-        if (_config.CopyToClipboard) TrySetClipboard(text);
-
-        return text;
+        await ReadAsync(crop, operationId);
     }
 
-    // --- Speech -----------------------------------------------------------------
+    // --- Reading ----------------------------------------------------------------
 
-    private async Task SpeakAsync(string text, int operationId)
+    /// <summary>
+    /// Runs the active engine, falling back to the local pipeline when a cloud reading
+    /// fails before it managed to say anything. Once the cloud engine has started speaking
+    /// a failure is reported rather than retried - restarting the page from the top would
+    /// be more disruptive than the truncation.
+    /// </summary>
+    private async Task ReadAsync(Bitmap crop, int operationId)
+    {
+        if (_cloud is not null)
+        {
+            try
+            {
+                await InSpeakingStateAsync(
+                    () => _cloud.ReadAsync(crop, CancellationToken.None), operationId);
+                return;
+            }
+            catch (RealtimeException ex)
+            {
+                // A capture that has already been superseded must neither report nor fall
+                // back: the balloon would be stale, and the local reading would talk over
+                // the selection the user has since started.
+                if (operationId != _operationId) return;
+
+                if (ex.Spoke)
+                {
+                    Report("Reading interrupted", ex.Message);
+                    return;
+                }
+
+                Report("Using local reading", ex.Message, ToolTipIcon.Warning);
+            }
+        }
+
+        await InSpeakingStateAsync(
+            () => _local.ReadAsync(crop, CancellationToken.None), operationId);
+    }
+
+    /// <summary>
+    /// Runs one reading inside the Speaking state, owning the ESC hook lifecycle
+    /// (SPEC 8.3), the stop-menu enablement and the clipboard copy - all of which are
+    /// identical whichever engine produced the audio.
+    /// </summary>
+    private async Task InSpeakingStateAsync(Func<Task<string?>> read, int operationId)
     {
         _state = State.Speaking;
         SetStopEnabled(true);
@@ -196,15 +255,23 @@ internal sealed class TrayAppContext : ApplicationContext
 
         try
         {
-            await _speech.SpeakAsync(text, CancellationToken.None);
+            var text = await read();
+
+            // A null return means the engine spoke a status message rather than page
+            // content, and status messages must never reach the clipboard.
+            if (text is not null && _config.CopyToClipboard) TrySetClipboard(text);
         }
         catch (OperationCanceledException)
         {
             // Expected whenever the user stops playback.
         }
+        catch (RealtimeException)
+        {
+            throw;                                  // ReadAsync decides whether to fall back
+        }
         catch (Exception ex) when (operationId == _operationId)
         {
-            _tray.ShowBalloonTip(6000, "Speech failed", ex.Message, ToolTipIcon.Error);
+            Report("Speech failed", ex.Message);
         }
         finally
         {
@@ -220,9 +287,15 @@ internal sealed class TrayAppContext : ApplicationContext
         }
     }
 
+    private void Report(string title, string message, ToolTipIcon icon = ToolTipIcon.Error) =>
+        _tray.ShowBalloonTip(6000, title, message, icon);
+
     private void StopSpeaking()
     {
-        _speech.Stop();
+        // Both engines, not just the active one: a cloud reading that failed over mid-run
+        // can leave the local engine speaking while _cloud is still the selected engine.
+        _local.Stop();
+        _cloud?.Stop();
         _escape.Stop();
         if (_state == State.Speaking) _state = State.Idle;
         SetStopEnabled(false);
@@ -266,17 +339,18 @@ internal sealed class TrayAppContext : ApplicationContext
         using var form = new SettingsForm(_config);
         if (form.ShowDialog() != DialogResult.OK) return;
 
-        var previousLanguage = _config.OcrLanguage;
         _config = form.Result;
         _config.Save();
+        ApiKeyStore.Save(form.ApiKey);
 
         Config.ApplyStartWithWindows(_config.StartWithWindows);
-        _speech.ApplySettings(_config);
+
+        // Rebuilds the cloud engine and pushes the new settings into both. The local
+        // engine discards its cached OcrService here only if the language changed.
+        ApplyEngineSettings();
+
         RegisterHotkeys();
         UpdateTooltip();
-
-        // Only rebuild the engine if the language actually changed; construction is not free.
-        if (previousLanguage != _config.OcrLanguage) _ocr = null;
     }
 
     // --- Tray icon --------------------------------------------------------------
@@ -334,7 +408,8 @@ internal sealed class TrayAppContext : ApplicationContext
             _icon.Dispose();
             _hotkeys.Dispose();
             _escape.Dispose();
-            _speech.Dispose();
+            _local.Dispose();
+            _cloud?.Dispose();
         }
         base.Dispose(disposing);
     }
