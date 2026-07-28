@@ -30,7 +30,7 @@ binary also cannot be overwritten by the copy. Stop the app with:
 prlctl exec "Windows 11" cmd /c 'taskkill /IM SelectAndRead.exe /F'
 ```
 
-## Five things that will waste your afternoon if you don't know them
+## Six things that will waste your afternoon if you don't know them
 
 These were all learned the hard way during bring-up. None are obvious, and each produced a
 convincing false diagnosis first.
@@ -86,6 +86,43 @@ That message is usually the session mismatch, not a missing key. To exercise the
 end to end, drive it through `launch-interactive.ps1` so it runs as the logged-on user —
 the same reason the overlay and hotkeys need it. There is deliberately no CLI flag to pass a
 key in: it would end up in shell history and in the scheduled-task command line.
+
+**6. A scheduled task stays `Running` for as long as the process it launched.** `deploy.sh
+--run` leaves `SarInteractive` in the `Running` state, because `SelectAndRead.exe` never
+exits. Every later `Start-ScheduledTask` against that same name is then refused, and the
+only evidence is a `LastTaskResult` of `2147946720` (`0x800710E0`, "the operator or
+administrator has refused the request") — `Start-ScheduledTask` itself reports success and
+`launch-interactive.ps1` still prints `started`. The symptom is a relay that silently does
+nothing while looking like it worked.
+
+Pass a distinct `-TaskName` for each concurrent relay rather than reusing the default:
+
+```bash
+prlctl exec "Windows 11" powershell -NoProfile -ExecutionPolicy Bypass \
+  -File 'C:\sar-test\launch-interactive.ps1' \
+  -Command 'cmd.exe' -Arguments '/c C:\sar-test\SelectAndRead.exe --settings-metrics > C:\Users\Public\metrics.txt 2>&1' \
+  -TaskName 'SarMetrics'
+```
+
+Check a relay actually ran with:
+
+```bash
+prlctl exec "Windows 11" powershell -NoProfile -Command \
+  "Get-ScheduledTask -TaskName SarMetrics | Get-ScheduledTaskInfo | Format-List LastTaskResult"
+```
+
+Two more things about relayed commands, both of which fail silently:
+
+- **Give the inner PowerShell `-ExecutionPolicy Bypass` of its own.** The outer `prlctl exec`
+  flag does not carry into the task.
+- **Write output somewhere the interactive user can write.** `C:\sar-test` is created by
+  SYSTEM; use `C:\Users\Public`. Allow a few seconds before reading — the relay is
+  asynchronous, and a `type` issued too early reports "cannot find the file specified",
+  which looks identical to the command having failed.
+
+**Reading an exit code back through `prlctl exec`:** `cmd /c '... & echo EXIT=%ERRORLEVEL%'`
+always prints `0`, because `%ERRORLEVEL%` is expanded when the line is parsed, before the
+command runs. Use `cmd /v:on /c '... & echo EXIT=!ERRORLEVEL!'`.
 
 ## Driving mouse input
 

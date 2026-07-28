@@ -33,6 +33,8 @@ internal sealed class SettingsForm : Form
     private readonly TextBox _cloudPrompt = new();
 
     private readonly TableLayoutPanel _grid = new();
+    private Panel? _scroll;
+    private Control? _buttons;
     private readonly int _inputWidth;
     private readonly int _pad;
 
@@ -55,11 +57,11 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         MaximizeBox = false;
 
-        // Scale with the system font, and let the content decide the size rather than
-        // asserting one.
+        // Scale with the system font. The size still comes from the content, but it is
+        // computed in OnLoad and clamped to the desktop rather than left to Form.AutoSize:
+        // AutoSize has no upper bound, so it grew the dialog straight past the bottom of
+        // the screen once the cloud rows were added.
         AutoScaleMode = AutoScaleMode.Font;
-        AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
         // Font-relative metrics: these track the user's text size instead of fighting it.
         _inputWidth = Font.Height * 14;
@@ -71,7 +73,11 @@ internal sealed class SettingsForm : Form
         _grid.ColumnCount = 2;
         _grid.AutoSize = true;
         _grid.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        _grid.Dock = DockStyle.Fill;
+
+        // Deliberately NOT docked. A Fill-docked child of an AutoScroll panel is resized to
+        // the viewport, so it can never be taller than the visible area and the scrollbar
+        // never appears - the content is simply clipped. Left undocked, AutoSize gives the
+        // grid its natural height and the panel scrolls it.
         _grid.Padding = new Padding(_pad);
         _grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -95,8 +101,88 @@ internal sealed class SettingsForm : Form
 
         BuildCloudControls(config);
 
-        AddButtons();
-        Controls.Add(_grid);
+        Controls.Add(BuildRoot());
+    }
+
+    /// <summary>
+    /// Scrolling rows, fixed buttons.
+    ///
+    /// The buttons deliberately live outside the scrolling region. They used to be the last
+    /// row of the grid, which worked only while the whole dialog fitted on screen: once the
+    /// content grew past the desktop the form clamped, and Save and Cancel were the rows
+    /// that fell off the bottom - unreachable, with no way to scroll to them. Anything that
+    /// must always be clickable belongs in the fixed row, not the scrolling one.
+    /// </summary>
+    private Control BuildRoot()
+    {
+        // AutoScroll but explicitly NOT AutoSize: an auto-sizing panel reports its full
+        // content height as its own size, so it never considers itself overfull and no
+        // scrollbar is shown. The panel has to be allowed to be smaller than its contents
+        // for scrolling to engage at all.
+        _scroll = new Panel
+        {
+            AutoScroll = true,
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
+        };
+        _scroll.Controls.Add(_grid);
+
+        var root = new TableLayoutPanel
+        {
+            ColumnCount = 1,
+            RowCount = 2,
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty,
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // rows: absorb the slack
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // buttons: never squeezed
+
+        _buttons = BuildButtons();
+
+        root.Controls.Add(_scroll, 0, 0);
+        root.Controls.Add(_buttons, 0, 1);
+        return root;
+    }
+
+    /// <summary>
+    /// Sizes the dialog from its content, then clamps it to the desktop.
+    ///
+    /// This replaces `Form.AutoSize`, which is content-driven but unbounded: it happily
+    /// sized the dialog past the bottom of the screen, taking the Save button with it. The
+    /// dimensions here are still entirely derived from the content and therefore from the
+    /// system font - nothing is hardcoded in pixels - the desktop only ever acts as a
+    /// ceiling.
+    ///
+    /// Consulting Screen here is not the coordinate-space mistake SPEC 4 warns about: that
+    /// rule governs capture and overlay geometry, which must stay in one physical-pixel
+    /// space indexed against the freeze frame. This is an ordinary dialog asking how much
+    /// desktop it may occupy, in its own DPI context.
+    /// </summary>
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+
+        var working = Screen.FromControl(this).WorkingArea;
+        var content = _grid.PreferredSize;
+
+        var chrome = new Size(Width - ClientSize.Width, Height - ClientSize.Height);
+        var maxClient = new Size(working.Width - chrome.Width, working.Height - chrome.Height);
+
+        var desiredHeight = content.Height + _buttons!.PreferredSize.Height;
+        var desiredWidth = content.Width;
+
+        var height = Math.Min(desiredHeight, maxClient.Height);
+
+        // Clamping means a vertical scrollbar appears, which steals width from the grid and
+        // would otherwise provoke a horizontal scrollbar as well. Pay for it up front.
+        if (height < desiredHeight) desiredWidth += SystemInformation.VerticalScrollBarWidth;
+
+        ClientSize = new Size(Math.Min(desiredWidth, maxClient.Width), height);
+
+        // Re-centre: the size changed after StartPosition had already placed the form.
+        Location = new Point(
+            working.X + Math.Max(0, (working.Width - Width) / 2),
+            working.Y + Math.Max(0, (working.Height - Height) / 2));
     }
 
     // --- Layout helpers ---------------------------------------------------------
@@ -195,7 +281,7 @@ internal sealed class SettingsForm : Form
         return row;
     }
 
-    private void AddButtons()
+    private Control BuildButtons()
     {
         var ok = new Button
         {
@@ -227,17 +313,16 @@ internal sealed class SettingsForm : Form
             FlowDirection = FlowDirection.RightToLeft,   // Cancel rightmost
             WrapContents = false,
             Anchor = AnchorStyles.Right,
-            Margin = new Padding(0, _pad, 0, 0),
+            // Padded on all sides now that this sits against the form edge rather than
+            // inside the grid, which supplied its own padding.
+            Margin = new Padding(_pad, _pad, _pad, _pad),
         };
         buttons.Controls.Add(cancel);
         buttons.Controls.Add(ok);
 
-        _grid.Controls.Add(buttons, 0, _grid.RowCount);
-        _grid.SetColumnSpan(buttons, 2);
-        _grid.RowCount++;
-
         AcceptButton = ok;
         CancelButton = cancel;
+        return buttons;
     }
 
     // --- Population -------------------------------------------------------------

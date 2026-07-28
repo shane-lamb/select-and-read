@@ -452,6 +452,29 @@ elevation required, and per-user, which is correct for a tray utility.
 
 ---
 
+### 10.1 Sizing — content-derived, desktop-bounded
+
+The dialog sizes itself from its content and the system font, never from hardcoded pixels.
+It does **not** use `Form.AutoSize`, which is content-driven but unbounded: once the cloud
+rows of §14 were added it sized the form past the bottom of the screen, and Save and Cancel
+went with it — unreachable, with nothing to scroll. `OnLoad` computes the size from
+`_grid.PreferredSize` and clamps it to the working area; overflow scrolls.
+
+Three rules follow, each of which was a defect first:
+
+- Save and Cancel live **outside** the scrolling region. Anything that must always be
+  clickable cannot be a row that can scroll away.
+- The grid is **not** docked inside the scroll panel. A `Fill`-docked child is resized to the
+  viewport, so it is never taller than the visible area, no scrollbar appears, and the
+  overflow is clipped instead.
+- The scroll panel is **not** `AutoSize`. An auto-sizing panel reports its full content
+  height as its own size and so never considers itself overfull.
+
+`--settings-metrics` (§12.2) checks all of this and exits non-zero if Save is off screen or
+content overflows with no scrollbar.
+
+---
+
 ## 11. Architecture
 
 WinForms, targeting `net10.0-windows10.0.19041.0`, with `app.manifest` declaring
@@ -510,7 +533,7 @@ code signing is out of scope for v1.
 
 ### 12.2 Debug CLI modes
 
-`Program.cs` supports five non-interactive modes so the risky logic can be exercised
+`Program.cs` supports six non-interactive modes so the risky logic can be exercised
 without the full interactive loop:
 
 | Mode | Behaviour |
@@ -520,6 +543,7 @@ without the full interactive loop:
 | `--speak "<text>"` | Speak the text and exit |
 | `--capture-to <png>` | Run the overlay, write the crop to disk, exit |
 | `--freeze-to <png>` | Save the raw freeze frame with no overlay involved |
+| `--settings-metrics` | Report dialog size, scrollability and Save reachability; non-zero if unusable |
 
 These exist primarily for verification (§13) but are also the fastest way to diagnose a
 user-reported bad recognition.
@@ -591,7 +615,10 @@ manual checklist:
   would show up, and is easy to test: set the VM's scaling and re-run the drag.
 - Global hotkey registration and conflict reporting (needs an interactive logon session
   driving real keystrokes).
-- The tray icon, menu and settings dialog.
+- The tray icon and menu.
+- The settings dialog's *appearance*. Its geometry is now checked by `--settings-metrics`
+  (§10.1) at both 1024×768 and 3840×1926, but nothing confirms it looks right, and it has
+  not been exercised at a raised system text size — historically where this dialog breaks.
 - ESC and stop-hotkey cancellation mid-playback.
 - Clipboard contents after a capture.
 - Protected/DRM content capturing black (§3.1).

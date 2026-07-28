@@ -69,6 +69,7 @@ interactive loop, and are the fastest way to diagnose almost anything:
 | `--capture-to <png>` | Overlay + crop; reports *why* a selection was cancelled |
 | `--freeze-to <png>` | Raw capture, no overlay — separates "capture is wrong" from "overlay is wrong" |
 | `--read-file <png>` | Cloud reading engine against a fixture; reports latency and token usage |
+| `--settings-metrics` | Settings dialog size, scrollability and whether Save is reachable |
 
 `--ocr-file` also reports the measured glyph height and chosen upscale factor on stderr,
 which is the first thing to look at for any "the OCR read it wrong" report. `--read-file` is
@@ -95,6 +96,25 @@ metrics (`Font.Height * n`), never hardcoded pixel bounds. It previously used ab
 the user raised the system text size: labels clipped to one character, rows overlapping,
 buttons pushed off the client area. Anything with user-visible text needs to size itself
 from its content.
+
+**But content-sized is not the same as unbounded, and `SettingsForm` now has three layout
+invariants that each produced a dialog you could not operate.** All are verifiable with
+`--settings-metrics`; run it after touching that file.
+
+- **`Form.AutoSize` has no upper bound.** It sized the dialog straight past the bottom of
+  the screen once the cloud rows were added, taking Save and Cancel with it. The size is
+  now computed in `OnLoad` from `_grid.PreferredSize` — still entirely content- and
+  font-derived — and clamped to the working area.
+- **A `Fill`-docked child of an `AutoScroll` panel can never scroll.** Docking resizes the
+  child to the viewport, so it is never taller than the visible area, no scrollbar appears,
+  and the overflow is silently clipped. `_grid` is deliberately left undocked.
+- **An `AutoSize` panel never shows a scrollbar.** It reports its full content height as its
+  own size, so it never considers itself overfull. The scroll panel must be allowed to be
+  smaller than its contents.
+
+**Anything that must always be clickable belongs outside the scrolling region.** Save and
+Cancel used to be the last row of `_grid`; when the dialog clamped, they were the rows that
+fell off the bottom. They now live in a fixed row of the root layout.
 
 **Per-Monitor-V2 DPI awareness is not multi-monitor code** (SPEC §4). It stays even though
 the app is single-monitor: without a DPI-aware manifest Windows virtualises the process and

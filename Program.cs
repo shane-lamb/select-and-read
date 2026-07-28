@@ -88,6 +88,9 @@ internal static class Program
                 case "--speak" when args.Length >= 2:
                     return Speak(args[1], config);
 
+                case "--settings-metrics":
+                    return SettingsMetrics(config);
+
                 case "--capture-to" when args.Length >= 2:
                     return CaptureTo(args[1]);
 
@@ -101,7 +104,8 @@ internal static class Program
                         "  SelectAndRead --read-file <image.png>  read it via the cloud engine\n" +
                         "  SelectAndRead --speak \"<text>\"         speak text and exit\n" +
                         "  SelectAndRead --capture-to <out.png>   select a region, save it\n" +
-                        "  SelectAndRead --freeze-to <out.png>    save the raw freeze frame");
+                        "  SelectAndRead --freeze-to <out.png>    save the raw freeze frame\n" +
+                        "  SelectAndRead --settings-metrics       check the dialog fits the screen");
                     return 2;
             }
         }
@@ -193,6 +197,103 @@ internal static class Program
         speech.ApplySettings(config);
         speech.SpeakAsync(text, CancellationToken.None).GetAwaiter().GetResult();
         return 0;
+    }
+
+    /// <summary>
+    /// Reports whether the settings dialog actually fits on screen, and whether its Save
+    /// button is reachable.
+    ///
+    /// The dialog grows with its content and with the system text size, so "does it still
+    /// fit?" is a real question with a numeric answer, and one that is otherwise only
+    /// discoverable by a human opening it on a small display. The exit code makes it usable
+    /// as a check rather than just a readout.
+    ///
+    /// Note this is genuinely useful under `prlctl exec`, despite session 0 being unable to
+    /// draw: session 0's desktop is a 1024x768 one, which is a far better proxy for a
+    /// cramped real display than the VM's own 4K interactive session.
+    /// </summary>
+    private static int SettingsMetrics(Config config)
+    {
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+
+        Rectangle working = Rectangle.Empty, form = Rectangle.Empty, save = Rectangle.Empty;
+        bool scrollable = false;
+        int viewport = 0, content = 0;
+
+        using (var dialog = new SettingsForm(config))
+        {
+            dialog.Shown += (_, _) =>
+            {
+                working = Screen.FromControl(dialog).WorkingArea;
+                form = dialog.Bounds;
+
+                if (FindSaveButton(dialog) is { } button)
+                    save = button.RectangleToScreen(button.ClientRectangle);
+
+                if (FindScrollPanel(dialog) is { } panel)
+                {
+                    scrollable = panel.VerticalScroll.Visible;
+                    viewport = panel.ClientSize.Height;
+                    content = panel.VerticalScroll.Visible
+                        ? panel.VerticalScroll.Maximum
+                        : panel.PreferredSize.Height;
+                }
+
+                dialog.Close();
+            };
+
+            Application.Run(dialog);
+        }
+
+        Console.WriteLine($"working area : {working.Width}x{working.Height}");
+        Console.WriteLine($"dialog       : {form.Width}x{form.Height} at {form.X},{form.Y}");
+
+        if (save.IsEmpty)
+        {
+            Console.Error.WriteLine("Save button not found.");
+            return 3;
+        }
+
+        Console.WriteLine($"save button  : {save.Width}x{save.Height} at {save.X},{save.Y}");
+
+        var fits = working.Contains(form);
+        var reachable = working.Contains(save);
+        var clipped = content > viewport;
+
+        Console.WriteLine($"content      : {content}px in a {viewport}px viewport");
+        Console.WriteLine($"scrollbar    : {scrollable}");
+        Console.WriteLine($"dialog fits  : {fits}");
+        Console.WriteLine($"save onscreen: {reachable}");
+
+        // Fitting entirely is nice but not required; a clamped dialog that scrolls its
+        // content is a pass. The two real failures are Save being off screen, and content
+        // overflowing with no scrollbar to reach it - which is exactly the state the
+        // buttons-inside-the-grid layout used to produce.
+        if (!reachable) return 1;
+        return clipped && !scrollable ? 1 : 0;
+    }
+
+    private static Panel? FindScrollPanel(Control parent)
+    {
+        foreach (Control child in parent.Controls)
+        {
+            if (child is Panel { AutoScroll: true } panel) return panel;
+            if (FindScrollPanel(child) is { } nested) return nested;
+        }
+
+        return null;
+    }
+
+    private static Button? FindSaveButton(Control parent)
+    {
+        foreach (Control child in parent.Controls)
+        {
+            if (child is Button { DialogResult: DialogResult.OK } button) return button;
+            if (FindSaveButton(child) is { } nested) return nested;
+        }
+
+        return null;
     }
 
     /// <summary>
