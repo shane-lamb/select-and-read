@@ -132,6 +132,16 @@ bitmap comes back fully transparent and the overlay renders solid black.
 **Capture the freeze frame before showing the overlay** (SPEC §2.2). This is what stops the
 overlay's dimming from contaminating the OCR'd image and stops the scene changing mid-drag.
 
+**The overlay is drawn for users with very poor vision**
+(SPEC §2.2). The app's users cannot see a 1px rectangle, so: nothing is dimmed until
+the drag starts — a wash over the whole screen hides the thing the user is aiming at, so
+pre-drag the overlay is a pixel-identical copy of the desktop plus a screen-spanning
+crosshair, and that crosshair is the *only* cue that the hotkey registered; every stroke is
+black paired with white, so one of the two contrasts whatever is underneath; and the
+selection border is drawn entirely *outside* the rectangle so it never covers the chosen
+content. Sizes are hardcoded constants at the top of `SelectionOverlay.cs` — deliberately
+not configurable, since there is no user of this app who wants them smaller.
+
 **The overlay must not cancel when it loses focus** (SPEC §2.3). Windows' foreground lock
 routinely activates it and then hands focus straight back, which cancelled selections before
 the user could draw. It stays escapable via a low-level ESC hook instead — which is also the

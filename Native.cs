@@ -15,6 +15,21 @@ internal static class Native
     [DllImport("user32.dll")]
     internal static extern int GetSystemMetrics(int nIndex);
 
+    // --- Cursor position --------------------------------------------------------
+    // Used to seed the overlay's crosshair, since the mouse may never move between the
+    // overlay opening and the click. Raw physical pixels under Per-Monitor-V2, with no
+    // WinForms layer that could reintroduce a second coordinate space (SPEC 4.1 - 4.2).
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct POINT
+    {
+        internal int X;
+        internal int Y;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetCursorPos(out POINT lpPoint);
+
     // --- Window positioning -----------------------------------------------------
     internal const uint SWP_NOZORDER = 0x0004;
     internal const uint SWP_NOACTIVATE = 0x0010;

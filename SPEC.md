@@ -73,10 +73,12 @@ Pressing the **capture hotkey** (default `Ctrl+Shift+F9`):
 1. **Freeze frame.** The primary monitor is captured to a bitmap *before anything is drawn
    on screen*.
 2. **Overlay.** A borderless, topmost window covering the whole primary monitor displays
-   that freeze frame with a ~45% black wash over it. The cursor becomes a crosshair.
-3. **Drag.** While the left button is held, a selection rectangle is drawn. The region
-   inside it is painted from the *undimmed* bitmap, with a 1px accent border and a small
-   `W × H` pixel readout offset from the cursor.
+   that freeze frame.
+3. **Drag.** While the left button is held, a selection rectangle is drawn.
+
+Every line stroke pairs black with white so that one of the two always contrasts, whatever is
+underneath — the same reason Windows' own high-contrast focus indicators are doubled. None
+of it can reach the OCR'd image, because the crop is taken from the freeze frame.
 4. **Release.** The overlay closes immediately and the pipeline runs.
 
 The freeze frame is the single most important decision in this document. Capturing first
@@ -207,13 +209,6 @@ Introducing any second coordinate space is a defect. In particular, do not use
 `Screen.Bounds` / `Screen.AllScreens` for overlay geometry (these are affected by the
 process's DPI awareness context and are a common source of this bug), and do not let any
 WinForms scaling apply to the overlay.
-
-### 4.3 Rendering performance
-
-Repainting an entire large screen on every mouse-move event is visibly laggy.
-The overlay is double-buffered, and on mouse-move only the union of the previous and
-current selection rectangles — inflated by ~4 px to cover the border and the size readout
-— is invalidated.
 
 ---
 
@@ -595,7 +590,7 @@ Apple Silicon can only virtualise Windows 11 ARM64.
 | Behaviour | Result |
 |---|---|
 | Freeze-frame capture of the screen | 3840×2024, correct content |
-| Overlay: dim wash, undimmed selection, border, `W × H` readout | Correct — photographed live |
+| Overlay: dim wash, undimmed selection, border, `W × H` readout | Correct — photographed live, but against the *pre-accessibility* overlay. The undimmed pre-drag state, crosshair, reticle, double-stroke border and corner brackets of §2.2 are **not yet verified on hardware** |
 | Drag → crop coordinate fidelity | **Pixel-exact**: a (225,365)–(1260,665) drag produced exactly 1035×300 |
 | OCR of real Windows-rendered text | 100% exact, character for character |
 | Upscaling on vs off | On: exact. Off: drops leading characters |

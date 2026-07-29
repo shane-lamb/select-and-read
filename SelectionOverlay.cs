@@ -3,19 +3,37 @@ using System.Drawing.Drawing2D;
 namespace SelectAndRead;
 
 /// <summary>
-/// Full-screen overlay that shows the freeze frame dimmed and lets the user drag out a
-/// rectangle (SPEC 2.2 - 2.3, 4).
+/// Full-screen overlay that shows the freeze frame and lets the user drag out a rectangle
+/// (SPEC 2.2 - 2.3, 4).
 ///
 /// Coordinate discipline, which is the whole point of this file: the window is positioned
 /// with SetWindowPos in raw physical pixels and never autoscaled, so client coordinates,
 /// mouse coordinates and freeze-frame pixel indices are all the same numbers. That holds
 /// at any display scaling, which is what stops a drag on a 150%-scaled screen from
 /// capturing the wrong region.
+///
+/// Everything drawn here is sized for very poor vision, which drives two choices that look
+/// odd next to an ordinary selection tool. Nothing is dimmed until the drag starts, because
+/// a wash over the whole screen hides the very thing the user is trying to aim at; and the
+/// cursor is marked with black-and-white lines spanning the entire screen, because at low
+/// acuity that is the only cue reliably findable without hunting. Black backing behind a
+/// white core means one of the two always contrasts, whatever is underneath.
+///
+/// None of this can reach the OCR'd image: the crop is taken from the freeze frame, not
+/// from anything painted here.
 /// </summary>
 internal sealed class SelectionOverlay : Form
 {
     private const int MinimumSelection = 5;   // SPEC 2.3: smaller than this is a stray click
-    private const int DimAlpha = 115;         // ~45% black wash
+    private const int DimAlpha = 200;         // ~78% black wash, applied only while dragging
+
+    private const int GuideOutline = 11;      // black backing band of the crosshair
+    private const int GuideCore = 5;          // white core, centred within the backing
+    private const int ReticleRadius = 44;     // pre-drag ring around the cursor
+    private const int BorderBand = 8;         // each of the two selection strokes
+    private const int BracketArm = 72;        // corner bracket length along each edge
+    private const int BracketBand = 24;       // corner bracket thickness
+
     private static readonly Size ReadoutSize = new(132, 26);
 
     private readonly Bitmap _frame;           // not owned; the caller disposes it
@@ -32,7 +50,6 @@ internal sealed class SelectionOverlay : Form
     private bool _closing;
     private Point _anchor;
     private Point _cursor;
-    private Rectangle? _lastDecoration;
 
     /// <summary>Selection in freeze-frame coordinates, or null if cancelled.</summary>
     internal Rectangle? Selection { get; private set; }
@@ -80,12 +97,20 @@ internal sealed class SelectionOverlay : Form
     {
         base.OnHandleCreated(e);
         ApplyPhysicalBounds();
+
+        // Before the first paint, so the crosshair is never drawn at (0,0) first.
+        SeedCursor();
     }
 
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
         ApplyPhysicalBounds();
+
+        // Again here, in case the pointer moved between handle creation and the window
+        // becoming visible - no MouseMove is delivered for that interval.
+        SeedCursor();
+        Invalidate();
 
         // Best effort only. Windows' foreground lock frequently refuses this when the
         // hotkey arrives while another application is active, so nothing may depend on
@@ -112,6 +137,16 @@ internal sealed class SelectionOverlay : Form
         0, 0, _screenSize.Width, _screenSize.Height,
         Native.SWP_NOZORDER | Native.SWP_SHOWWINDOW);
 
+    /// <summary>
+    /// The mouse may never move between the overlay opening and the click, so the crosshair
+    /// cannot wait for the first MouseMove. The window is at (0,0), so screen and client
+    /// coordinates are the same numbers (SPEC 4.1).
+    /// </summary>
+    private void SeedCursor()
+    {
+        if (Native.GetCursorPos(out var p)) _cursor = new Point(p.X, p.Y);
+    }
+
     // --- Input ------------------------------------------------------------------
 
     protected override void OnMouseDown(MouseEventArgs e)
@@ -124,16 +159,17 @@ internal sealed class SelectionOverlay : Form
         _dragging = true;
         _anchor = e.Location;
         _cursor = e.Location;
-        InvalidateDecoration();
+        Invalidate();
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        if (!_dragging) return;
 
+        // Tracked before the drag too: the crosshair follows the pointer from the moment
+        // the overlay appears.
         _cursor = e.Location;
-        InvalidateDecoration();
+        Invalidate();
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -202,25 +238,6 @@ internal sealed class SelectionOverlay : Form
         return new Rectangle(x, y, ReadoutSize.Width, ReadoutSize.Height);
     }
 
-    /// <summary>Everything the overlay draws on top of the dimmed frame.</summary>
-    private Rectangle DecorationBounds()
-    {
-        var sel = CurrentSelection();
-        sel.Inflate(4, 4);   // covers the border stroke
-        return Rectangle.Union(sel, ReadoutBounds());
-    }
-
-    /// <summary>
-    /// SPEC 4.3: repainting the whole screen per mouse-move is visibly laggy, so only the
-    /// union of the previous and current decorations is invalidated.
-    /// </summary>
-    private void InvalidateDecoration()
-    {
-        var current = DecorationBounds();
-        Invalidate(_lastDecoration is { } previous ? Rectangle.Union(previous, current) : current);
-        _lastDecoration = current;
-    }
-
     // --- Painting ---------------------------------------------------------------
 
     protected override void OnPaintBackground(PaintEventArgs e)
@@ -231,33 +248,130 @@ internal sealed class SelectionOverlay : Form
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        var clip = e.ClipRectangle;
 
         // Guarantee an exact 1:1 pixel copy of the freeze frame.
         g.InterpolationMode = InterpolationMode.NearestNeighbor;
         g.PixelOffsetMode = PixelOffsetMode.Half;
         g.CompositingQuality = CompositingQuality.HighSpeed;
 
-        // Only the invalidated slice is drawn, both for the frame and the wash.
-        g.DrawImage(_frame, clip, clip, GraphicsUnit.Pixel);
+        var screen = new Rectangle(Point.Empty, _screenSize);
+        g.DrawImage(_frame, screen, screen, GraphicsUnit.Pixel);
 
-        using (var dim = new SolidBrush(Color.FromArgb(DimAlpha, 0, 0, 0)))
-            g.FillRectangle(dim, clip);
+        if (_dragging)
+        {
+            var sel = CurrentSelection();
+            DimAround(g, sel);
+            DrawSelectionBorder(g, sel);
+            DrawCorners(g, sel);
+            DrawReadout(g, sel);
+        }
+        else
+        {
+            DrawReticle(g);
+        }
 
-        if (!_dragging) return;
+        DrawGuides(g);   // last, so the guides are never buried
+    }
 
-        var sel = CurrentSelection();
-        if (sel.Width <= 0 || sel.Height <= 0) return;
+    /// <summary>
+    /// Dims the four bands around the selection rather than washing the whole screen and
+    /// repainting the selection undimmed. Degrades correctly while the selection is still
+    /// zero-sized: the bands then cover everything.
+    /// </summary>
+    private void DimAround(Graphics g, Rectangle sel)
+    {
+        var s = Rectangle.Intersect(sel, new Rectangle(Point.Empty, _screenSize));
+        using var dim = new SolidBrush(Color.FromArgb(DimAlpha, 0, 0, 0));
 
-        // Repaint the selected region undimmed, so it reads as a hole in the wash.
-        var visible = Rectangle.Intersect(sel, clip);
-        if (visible is { Width: > 0, Height: > 0 })
-            g.DrawImage(_frame, visible, visible, GraphicsUnit.Pixel);
+        g.FillRectangle(dim, 0, 0, _screenSize.Width, s.Top);
+        g.FillRectangle(dim, 0, s.Bottom, _screenSize.Width, _screenSize.Height - s.Bottom);
+        g.FillRectangle(dim, 0, s.Top, s.Left, s.Height);
+        g.FillRectangle(dim, s.Right, s.Top, _screenSize.Width - s.Right, s.Height);
+    }
 
-        using (var pen = new Pen(Color.FromArgb(255, 90, 160, 255)))
-            g.DrawRectangle(pen, sel.X, sel.Y, Math.Max(0, sel.Width - 1), Math.Max(0, sel.Height - 1));
+    /// <summary>
+    /// Screen-spanning crosshair through the cursor. Both backing bands are laid down
+    /// before either core, so the intersection stays clean. Filled rectangles rather than
+    /// pens keep the edges crisp, and GDI+ clips at the screen edges for free.
+    /// </summary>
+    private void DrawGuides(Graphics g)
+    {
+        using var black = new SolidBrush(Color.Black);
+        using var white = new SolidBrush(Color.White);
 
-        DrawReadout(g, sel);
+        g.FillRectangle(black, 0, _cursor.Y - GuideOutline / 2, _screenSize.Width, GuideOutline);
+        g.FillRectangle(black, _cursor.X - GuideOutline / 2, 0, GuideOutline, _screenSize.Height);
+        g.FillRectangle(white, 0, _cursor.Y - GuideCore / 2, _screenSize.Width, GuideCore);
+        g.FillRectangle(white, _cursor.X - GuideCore / 2, 0, GuideCore, _screenSize.Height);
+    }
+
+    /// <summary>Ring marking the cursor before a drag begins, where the selection itself
+    /// is not yet drawing any attention to it.</summary>
+    private void DrawReticle(Graphics g)
+    {
+        var box = new Rectangle(
+            _cursor.X - ReticleRadius, _cursor.Y - ReticleRadius,
+            ReticleRadius * 2, ReticleRadius * 2);
+
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var backing = new Pen(Color.Black, GuideOutline))
+            g.DrawEllipse(backing, box);
+        using (var core = new Pen(Color.White, GuideCore))
+            g.DrawEllipse(core, box);
+        g.SmoothingMode = SmoothingMode.Default;
+    }
+
+    /// <summary>
+    /// Two strokes, both entirely outside the selection so none of the content the user
+    /// picked is covered. Black innermost separates the white from light content; white
+    /// outermost is what shows against the dim.
+    /// </summary>
+    private static void DrawSelectionBorder(Graphics g, Rectangle sel)
+    {
+        // Pen strokes are centred on the path, hence the half-width inflations.
+        using var black = new Pen(Color.Black, BorderBand);
+        using var white = new Pen(Color.White, BorderBand);
+
+        g.DrawRectangle(black, Rectangle.Inflate(sel, BorderBand / 2, BorderBand / 2));
+        g.DrawRectangle(white, Rectangle.Inflate(sel, BorderBand + BorderBand / 2, BorderBand + BorderBand / 2));
+    }
+
+    /// <summary>
+    /// L-shaped brackets straddling the four corners, thicker and longer than the border
+    /// itself. Once the edges blur into one another the corners are what remains legible.
+    /// </summary>
+    private static void DrawCorners(Graphics g, Rectangle sel)
+    {
+        // Clamped so opposite brackets cannot overrun each other on a small selection.
+        var arm = Math.Min(BracketArm, Math.Min(sel.Width, sel.Height) / 2);
+        if (arm <= 0) return;
+
+        using var black = new SolidBrush(Color.Black);
+        using var white = new SolidBrush(Color.White);
+
+        DrawBracketBand(g, black, sel, arm, near: 0, far: BracketBand / 2);
+        DrawBracketBand(g, white, sel, arm, near: BracketBand / 2, far: BracketBand);
+    }
+
+    /// <summary>
+    /// One concentric layer of the corner brackets: eight bars forming four Ls, occupying
+    /// the band between <paramref name="near"/> and <paramref name="far"/> pixels outside
+    /// the selection.
+    /// </summary>
+    private static void DrawBracketBand(Graphics g, Brush brush, Rectangle sel, int arm, int near, int far)
+    {
+        int l = sel.Left, t = sel.Top, r = sel.Right, b = sel.Bottom;
+        var band = far - near;
+        var run = arm + far;
+
+        g.FillRectangle(brush, l - far, t - far, run, band);      // top-left, horizontal
+        g.FillRectangle(brush, l - far, t - far, band, run);      // top-left, vertical
+        g.FillRectangle(brush, r - arm, t - far, run, band);      // top-right, horizontal
+        g.FillRectangle(brush, r + near, t - far, band, run);     // top-right, vertical
+        g.FillRectangle(brush, l - far, b + near, run, band);     // bottom-left, horizontal
+        g.FillRectangle(brush, l - far, b - arm, band, run);      // bottom-left, vertical
+        g.FillRectangle(brush, r - arm, b + near, run, band);     // bottom-right, horizontal
+        g.FillRectangle(brush, r + near, b - arm, band, run);     // bottom-right, vertical
     }
 
     private void DrawReadout(Graphics g, Rectangle sel)
