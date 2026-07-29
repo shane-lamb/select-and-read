@@ -30,7 +30,9 @@ internal sealed class SettingsForm : Form
     private readonly TextBox _apiKey = new();
     private readonly ComboBox _cloudModel = new();
     private readonly TextBox _cloudVoice = new();
+    private readonly CheckBox _overridePrompt = new();
     private readonly TextBox _cloudPrompt = new();
+    private string _customPrompt = string.Empty;
 
     private readonly TableLayoutPanel _grid = new();
     private Panel? _scroll;
@@ -393,21 +395,52 @@ internal sealed class SettingsForm : Form
             : config.CloudVoice;
         AddRow("Cloud voice", _cloudVoice);
 
-        // Multi-line and tall enough to show the default prompt without scrolling. Height
-        // is font-relative like every other metric here, so it grows with the system text
-        // size rather than clipping to one line.
+        AddCheck(_overridePrompt, "Override default reading prompt", config.OverrideCloudPrompt);
+        _customPrompt = config.CloudPrompt ?? string.Empty;
+
         _cloudPrompt.Multiline = true;
         _cloudPrompt.ScrollBars = ScrollBars.Vertical;
         _cloudPrompt.Height = Font.Height * 5;
-        _cloudPrompt.Text = string.IsNullOrWhiteSpace(config.CloudPrompt)
-            ? Config.DefaultCloudPrompt
-            : config.CloudPrompt;
         AddRow("Reading prompt", _cloudPrompt);
-        AddHint("What to tell the model. The default asks it to read verbatim; change it to " +
-                "summarise, translate, or describe images instead.");
+        AddHint("Instructions for the model.");
+
+        _overridePrompt.CheckedChanged += (_, _) =>
+        {
+            // Capture on the way out, while the box still holds what the user wrote. Doing
+            // it inside UpdatePromptSource would also run on the initial call, where the box
+            // is still empty, and would wipe the prompt loaded from the config.
+            if (!_overridePrompt.Checked) _customPrompt = _cloudPrompt.Text;
+            UpdatePromptSource();
+        };
+        UpdatePromptSource();
 
         _useCloud.CheckedChanged += (_, _) => UpdateCloudEnabled();
         UpdateCloudEnabled();
+    }
+
+    /// <summary>
+    /// Swaps the box between the built-in prompt and the user's own.
+    ///
+    /// The default is shown read-only rather than blanked or hidden: seeing the exact text
+    /// the app will send - and being able to select and copy it as a starting point.
+    /// </summary>
+    private void UpdatePromptSource()
+    {
+        if (_overridePrompt.Checked)
+        {
+            _cloudPrompt.ReadOnly = false;
+            _cloudPrompt.BackColor = SystemColors.Window;
+            // Seed an empty custom prompt from the default
+            _cloudPrompt.Text = string.IsNullOrWhiteSpace(_customPrompt)
+                ? Config.DefaultCloudPrompt
+                : _customPrompt;
+        }
+        else
+        {
+            _cloudPrompt.ReadOnly = true;
+            _cloudPrompt.BackColor = SystemColors.Control;
+            _cloudPrompt.Text = Config.DefaultCloudPrompt;
+        }
     }
 
     private void SelectModel(string? id)
@@ -430,6 +463,7 @@ internal sealed class SettingsForm : Form
         _apiKey.Enabled = _useCloud.Checked;
         _cloudModel.Enabled = _useCloud.Checked;
         _cloudVoice.Enabled = _useCloud.Checked;
+        _overridePrompt.Enabled = _useCloud.Checked;
         _cloudPrompt.Enabled = _useCloud.Checked;
     }
 
@@ -495,7 +529,8 @@ internal sealed class SettingsForm : Form
         UseCloudEngine = _useCloud.Checked,
         CloudModel = (_cloudModel.SelectedItem as ModelItem)?.Id ?? Config.DefaultCloudModel,
         CloudVoice = _cloudVoice.Text,
-        CloudPrompt = _cloudPrompt.Text,
+        OverrideCloudPrompt = _overridePrompt.Checked,
+        CloudPrompt = _overridePrompt.Checked ? _cloudPrompt.Text : _customPrompt,
     };
 
     private const string AutomaticLanguage = "(automatic)";

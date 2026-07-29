@@ -50,7 +50,7 @@ internal sealed class RealtimeReadingEngine : IReadingEngine
     {
         _model = Blank(config.CloudModel) ? Config.DefaultCloudModel : config.CloudModel;
         _voice = Blank(config.CloudVoice) ? Config.DefaultCloudVoice : config.CloudVoice;
-        _prompt = Blank(config.CloudPrompt) ? Config.DefaultCloudPrompt : config.CloudPrompt;
+        _prompt = config.EffectiveCloudPrompt;
 
         static bool Blank(string? value) => string.IsNullOrWhiteSpace(value);
     }

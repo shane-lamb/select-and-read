@@ -34,7 +34,18 @@ internal sealed class Config
 
     public string CloudVoice { get; set; } = DefaultCloudVoice;
 
-    public string CloudPrompt { get; set; } = DefaultCloudPrompt;
+    public bool OverrideCloudPrompt { get; set; }
+
+    /// <summary>The user's own prompt. Only in effect when <see cref="OverrideCloudPrompt"/>
+    /// is set; otherwise retained purely so toggling the override back on restores it.</summary>
+    public string CloudPrompt { get; set; } = string.Empty;
+
+    /// <summary>What the engine should actually send.</summary>
+    [JsonIgnore]
+    public string EffectiveCloudPrompt =>
+        OverrideCloudPrompt && !string.IsNullOrWhiteSpace(CloudPrompt)
+            ? CloudPrompt
+            : DefaultCloudPrompt;
 
     internal const string DefaultCloudModel = "gpt-realtime-2.1-mini";
     internal const string DefaultCloudVoice = "cedar";
