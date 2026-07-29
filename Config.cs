@@ -53,13 +53,12 @@ internal sealed class Config
     /// <summary>
     /// Steers the model towards transcription rather than description. Without an explicit
     /// instruction a realtime model will happily narrate ("This looks like a settings
-    /// window showing...") instead of reading, which is not what the app is for.
+    /// window showing...") instead of reading.
     /// </summary>
     internal const string DefaultCloudPrompt =
         "Read the text in this image aloud, verbatim and in natural reading order. " +
         "Do not summarise, describe the image, or add commentary of your own. " +
-        "Start reading right away - don't add an introduction. " +
-        "If there is no readable text, say only \"No text found.\"";
+        "Start reading right away - don't add an introduction.";
 
     [JsonIgnore]
     public Hotkey Capture => Hotkey.ParseOrDefault(CaptureHotkey, Hotkey.DefaultCapture);
