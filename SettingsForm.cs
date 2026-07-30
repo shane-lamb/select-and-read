@@ -40,6 +40,12 @@ internal sealed class SettingsForm : Form
     private readonly int _inputWidth;
     private readonly int _pad;
 
+    /// <summary>
+    /// Text that wraps rather than widening the dialog, with the width it asks for when
+    /// there is room. Re-bounded to the viewport whenever that is the smaller of the two.
+    /// </summary>
+    private readonly List<(Control Control, int NaturalWidth)> _wrapping = new();
+
     /// <summary>Populated when the dialog returns OK.</summary>
     internal Config Result { get; private set; }
 
@@ -76,13 +82,9 @@ internal sealed class SettingsForm : Form
         _grid.AutoSize = true;
         _grid.AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        // Deliberately NOT docked. A Fill-docked child of an AutoScroll panel is resized to
-        // the viewport, so it can never be taller than the visible area and the scrollbar
-        // never appears - the content is simply clipped. Left undocked, AutoSize gives the
-        // grid its natural height and the panel scrolls it.
         _grid.Padding = new Padding(_pad);
-        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));      // captions: as wide as their text
+        _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         AddRow("Capture hotkey", _capture);
         AddRow("Stop hotkey", _stop);
@@ -171,20 +173,50 @@ internal sealed class SettingsForm : Form
         var maxClient = new Size(working.Width - chrome.Width, working.Height - chrome.Height);
 
         var desiredHeight = content.Height + _buttons!.PreferredSize.Height;
-        var desiredWidth = content.Width;
 
-        var height = Math.Min(desiredHeight, maxClient.Height);
+        // Reserve the vertical scrollbar unconditionally rather than predicting whether one
+        // will appear. The prediction - "only if the height clamps" - compared a pre-layout
+        // PreferredSize against the working area, and wrapped labels measure taller once
+        // they have actually been laid out. When it came up short the scrollbar appeared
+        // anyway, unbudgeted, took its width out of the grid, and produced a horizontal
+        // scrollbar. Paying for it always costs a few pixels of width when it turns out to
+        // be unnecessary, and cannot be wrong.
+        var desiredWidth = content.Width + SystemInformation.VerticalScrollBarWidth;
 
-        // Clamping means a vertical scrollbar appears, which steals width from the grid and
-        // would otherwise provoke a horizontal scrollbar as well. Pay for it up front.
-        if (height < desiredHeight) desiredWidth += SystemInformation.VerticalScrollBarWidth;
-
-        ClientSize = new Size(Math.Min(desiredWidth, maxClient.Width), height);
+        ClientSize = new Size(
+            Math.Min(desiredWidth, maxClient.Width),
+            Math.Min(desiredHeight, maxClient.Height));
 
         // Re-centre: the size changed after StartPosition had already placed the form.
         Location = new Point(
             working.X + Math.Max(0, (working.Width - Width) / 2),
             working.Y + Math.Max(0, (working.Height - Height) / 2));
+
+        // Only now, once the size above has been taken from the content: pinning the grid
+        // any earlier would feed the form's default width back into that measurement.
+        _scroll!.ClientSizeChanged += (_, _) => FitToViewportWidth();
+        FitToViewportWidth();
+    }
+
+    /// <summary>
+    /// Pins the grid to the width of the visible area, so the dialog only ever scrolls
+    /// vertically.
+    /// </summary>
+    private void FitToViewportWidth()
+    {
+        if (_scroll is null) return;
+
+        var width = _scroll.ClientSize.Width;
+        if (width <= 0 || _grid.MaximumSize.Width == width) return;
+
+        // Min and Max together: AutoSize honours both, so this fixes the width while
+        // leaving the height free to grow with the content.
+        _grid.MinimumSize = new Size(width, 0);
+        _grid.MaximumSize = new Size(width, 0);
+
+        var textWidth = width - _pad * 2;
+        foreach (var (control, natural) in _wrapping)
+            control.MaximumSize = new Size(Math.Min(natural, textWidth), 0);
     }
 
     // --- Layout helpers ---------------------------------------------------------
@@ -220,6 +252,7 @@ internal sealed class SettingsForm : Form
             Margin = new Padding(0, 0, 0, _pad),
         };
 
+        _wrapping.Add((hint, _inputWidth));
         _grid.Controls.Add(hint, 1, _grid.RowCount);
         _grid.RowCount++;
     }
@@ -231,6 +264,10 @@ internal sealed class SettingsForm : Form
         box.AutoSize = true;
         box.Margin = new Padding(0, _pad / 2, 0, _pad / 2);
 
+        // Spans both columns, so nothing else bounds it: without a cap a long caption sets
+        // the width of the whole dialog, and clips instead of wrapping once that width is
+        // no longer available.
+        _wrapping.Add((box, int.MaxValue));
         _grid.Controls.Add(box, 0, _grid.RowCount);
         _grid.SetColumnSpan(box, 2);
         _grid.RowCount++;
@@ -373,10 +410,8 @@ internal sealed class SettingsForm : Form
         AddSeparator();
 
         AddCheck(_useCloud, "Read with a cloud model instead of local OCR", config.UseCloudEngine);
-        AddHint("Sends the selected area to OpenAI and plays the speech it streams back. " +
-                "More accurate on small text, tables and columns, and starts speaking sooner. " +
-                "Costs roughly 2 cents per reading and needs an internet connection. " +
-                "Falls back to local reading if the call fails.");
+        AddHint("OCR/voice will be remotely processed by OpenAI which will consume some credits. " +
+                "Will fall back to local processing if there's an error.");
 
         _apiKey.UseSystemPasswordChar = true;
         _apiKey.Text = ApiKeyStore.Load() ?? string.Empty;
