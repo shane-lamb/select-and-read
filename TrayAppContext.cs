@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace SelectAndRead;
@@ -47,6 +48,7 @@ internal sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings()));
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem($"Select and Read v{AppVersion}") { Enabled = false });
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => ExitApp()));
 
         _tray = new NotifyIcon
@@ -354,6 +356,17 @@ internal sealed class TrayAppContext : ApplicationContext
     }
 
     // --- Tray icon --------------------------------------------------------------
+
+    /// <summary>
+    /// The &lt;Version&gt; from the csproj, shown in the tray menu so a bug report can name
+    /// the build it came from. Read from the assembly rather than hardcoded, which keeps
+    /// the csproj the single source of truth (SPEC 12.3). Uses the attribute and not
+    /// <c>Assembly.Location</c>, which is empty under <c>PublishSingleFile</c>.
+    /// </summary>
+    private static string AppVersion =>
+        typeof(TrayAppContext).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? "unknown";
 
     private static Icon CreateTrayIcon()
     {
