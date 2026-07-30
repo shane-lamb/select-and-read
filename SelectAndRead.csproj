@@ -12,6 +12,21 @@
 
     <AssemblyName>SelectAndRead</AssemblyName>
     <RootNamespace>SelectAndRead</RootNamespace>
+
+    <!-- The single source of truth for releases (SPEC 12.3). Bumping this integer and
+         pushing to main is the whole release process: .github/workflows/release.yml reads
+         it back out of this file, and publishes a tagged Release when it has changed.
+         Note that app.manifest carries its own version - that is the Win32 side-by-side
+         identity, which is unrelated and deliberately left alone. -->
+    <Version>1</Version>
+    <!-- Spelled out rather than left to default from Version, which would hand Roslyn a
+         major-only "1" to validate as an assembly version. The tray menu reads
+         InformationalVersion, which does default from Version and stays the bare integer. -->
+    <AssemblyVersion>$(Version).0.0.0</AssemblyVersion>
+    <FileVersion>$(Version).0.0.0</FileVersion>
+    <!-- Without this the SDK appends "+<commit-sha>" to InformationalVersion, which the
+         tray menu shows verbatim. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- WFO0003 asks us to declare DPI awareness via ApplicationHighDpiMode instead of
          the manifest. We deliberately do the opposite: the manifest is applied by the

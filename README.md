@@ -17,6 +17,14 @@ Requires Windows 10 1809 or later, or Windows 11. **Single monitor only** — th
 covers the primary display, so selections can only be drawn there. See [SPEC.md](SPEC.md)
 for the full design and the reasoning behind it.
 
+## Download
+
+Grab `SelectAndRead-v<n>-win-x64.exe` from the
+[latest release](https://github.com/shane-lamb/select-and-read/releases/latest). It is
+self-contained — no .NET runtime install, no setup, just run it and look for the tray icon.
+
+Unsigned binaries trigger a SmartScreen warning on first run: *More info → Run anyway*.
+
 ## Building
 
 ```bash
@@ -36,6 +44,21 @@ The build works from macOS and Linux as well as Windows (`EnableWindowsTargeting
 csproj), which is useful for compile-checking, though the app itself only runs on Windows.
 
 Unsigned binaries trigger a SmartScreen warning on first run: *More info → Run anyway*.
+
+## Cutting a release
+
+The version is a single integer in `SelectAndRead.csproj`, and bumping it *is* the release
+process:
+
+```xml
+<Version>2</Version>
+```
+
+Commit that to `main` and [the release workflow](.github/workflows/release.yml) runs the
+tests, publishes a self-contained `win-x64` exe and attaches it to a new
+`v2` release. A push to `main` that does not change the version is skipped, so there is no
+risk in pushing ordinary commits. The running version is shown at the bottom of the tray
+menu.
 
 ## Deploying to the test VM
 

@@ -543,6 +543,36 @@ without the full interactive loop:
 These exist primarily for verification (§13) but are also the fastest way to diagnose a
 user-reported bad recognition.
 
+### 12.3 Versioning and releases
+
+The version is a **single integer** — `1`, `2`, `3` — held in `<Version>` in
+`SelectAndRead.csproj`, which is the only place it is written down. There is no
+major/minor split because there is nothing for it to communicate: the app has no API, no
+file format anyone else consumes, and no persisted state a new build could break, so a
+"breaking change" is not a category that exists here. A number that only goes up is enough
+to answer the one question that matters, *which build is this*, and it makes bumping a
+release a one-character edit rather than a judgement call.
+
+`app.manifest` also carries a `version="1.0.0.0"`. That is the Win32 side-by-side assembly
+identity, is unrelated to the product version, and is deliberately **not** kept in sync —
+nothing reads it, and changing it risks the manifest for no benefit.
+
+Releases are cut by `.github/workflows/release.yml`:
+
+1. A push to `main` reads `<Version>` back out of the csproj on a Linux runner.
+2. If a tag `v<n>` already exists, the run stops there — green, seconds long, no build.
+   Ordinary pushes to `main` therefore cost nothing.
+3. Otherwise it runs both test projects, publishes the §12.1 `win-x64` single-file build,
+   and attaches it to a new release tagged `v<n>` as `SelectAndRead-v<n>-win-x64.exe`.
+
+So the entire release process is: bump the integer, push to `main`.
+
+The version is surfaced in the tray menu as a disabled item above *Exit*, read from
+`AssemblyInformationalVersionAttribute` at runtime, so a user can name their build without
+finding the exe. This is also why the csproj sets
+`IncludeSourceRevisionInInformationalVersion` to `false` — the SDK otherwise appends
+`+<commit-sha>`, which would be shown verbatim.
+
 ---
 
 ## 13. Verification
@@ -571,10 +601,14 @@ Apple Silicon can only virtualise Windows 11 ARM64.
 
 ### 13.2 Approach
 
-1. **Compile-check on macOS — confirmed working.** With `EnableWindowsTargeting` set, the
-   Windows-targeted WinForms + WinRT project builds cleanly from macOS using the .NET 10
-   SDK; the reference packs restore from NuGet. The app cannot *run* there, but every
-   compile error is caught locally.
+1. **Building on macOS — confirmed working, up to and including a shippable exe.** With
+   `EnableWindowsTargeting` set, the Windows-targeted WinForms + WinRT project builds
+   cleanly from macOS using the .NET 10 SDK; the reference packs restore from NuGet. This
+   is **not** limited to compile-checking: the full `--self-contained
+   -p:PublishSingleFile=true` publish for a Windows RID works too, which is exactly what
+   `tests/vm/deploy.sh` does on every deploy — the exe it hands to the VM was built on the
+   Mac. **The only thing that requires Windows is running the result**, which is why §12.3
+   can build releases on a Linux runner.
 2. **`TextCleaner` unit tests run anywhere.** `tests/TextCleaner.Tests` targets plain
    `net10.0` and compiles `TextCleaner.cs` in directly (linked, not referenced), so the
    normalisation rules in §6 are genuinely executed and asserted during development
@@ -719,7 +753,7 @@ saved-password stores offer, and the right level for a tray utility.
 
 | Question | Status |
 |---|---|
-| Does cross-compilation from macOS work for this TFM? | **Resolved: yes.** .NET 10 SDK, `EnableWindowsTargeting`, clean build with no warnings. |
+| Does cross-compilation from macOS work for this TFM? | **Resolved: yes,** and further than a compile — .NET 10 SDK with `EnableWindowsTargeting` gives a clean build *and* a working self-contained single-file publish for a Windows RID. `tests/vm/deploy.sh` relies on it, and so does the release workflow (§12.3). |
 | Does upscaling actually improve accuracy? | **Resolved: yes,** decisively, on realistic input (§5.2). It made no clear difference on synthetic fixtures, which is why the real-capture fixture exists. |
 | How does the engine order multi-column text? | **Resolved:** by column, not interleaved line by line as originally predicted (§6.1). |
 | Does time-to-first-word need chunked synthesis? | **Open.** Not yet measured end to end. §7.4 ships the simple path behind an interface so chunking drops in later without redesign. |

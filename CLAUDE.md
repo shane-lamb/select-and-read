@@ -31,6 +31,11 @@ Publish a single self-contained exe (~147 MB; `win-x64` also valid):
 dotnet publish -c Release -r win-arm64 --self-contained -p:PublishSingleFile=true
 ```
 
+Cut a release by bumping the single integer in `<Version>` in `SelectAndRead.csproj` and
+pushing to `main` — `.github/workflows/release.yml` does the rest (SPEC §12.3). That
+property is the only place the version is written; nothing else needs updating, and
+`app.manifest`'s version is a different thing that stays where it is.
+
 ## Development happens on a Mac; the app only runs on Windows
 
 Builds work on macOS via `EnableWindowsTargeting` in the csproj, so compile errors are

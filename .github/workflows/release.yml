@@ -1,0 +1,88 @@
+# Publishes a GitHub Release whenever <Version> in SelectAndRead.csproj changes.
+#
+# The whole release process is: bump that integer, commit, push to main. The check job
+# below compares it against the existing tags and does nothing if it has already been
+# released, so ordinary pushes to main finish in seconds without installing an SDK or
+# restoring the ~150 MB of runtime packs the publish needs.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  # So the workflow can be exercised from a feature branch before it is merged.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags are what record "this version has already been released", so the
+          # shallow default clone is not enough.
+          fetch-depth: 0
+
+      - id: version
+        name: Read version and check whether it is already released
+        run: |
+          VERSION=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' SelectAndRead.csproj)
+          if [ -z "$VERSION" ]; then
+            echo "::error::No <Version> found in SelectAndRead.csproj"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "v$VERSION is already released - nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$VERSION is new - building a release."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    # Linux, not Windows: a self-contained publish for a Windows RID is host-agnostic
+    # (EnableWindowsTargeting in the csproj), which is how tests/vm/deploy.sh produces the
+    # exe it ships to the VM from a Mac. Only *running* the result needs Windows.
+    runs-on: ubuntu-latest
+    env:
+      ASSET: SelectAndRead-v${{ needs.check.outputs.version }}-win-x64.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # There is no .sln, so a bare `dotnet test` at the root discovers nothing; the two
+      # test projects have to be named. Both are plain net10.0 and run anywhere.
+      - run: dotnet test tests/TextCleaner.Tests
+      - run: dotnet test tests/RealtimeProtocol.Tests
+
+      # -o keeps us off the real output path, whose framework segment is the full
+      # net10.0-windows10.0.19041.0. Trimming stays off - it breaks WinForms reflection
+      # over designer types (SPEC 12.1).
+      - name: Publish win-x64
+        run: >
+          dotnet publish SelectAndRead.csproj -c Release -r win-x64
+          --self-contained -p:PublishSingleFile=true -o publish
+
+      - name: Name the asset after the version
+        run: mv publish/SelectAndRead.exe "$ASSET"
+
+      # gh creates the tag itself from --target, so there is no separate tagging step.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "v${{ needs.check.outputs.version }}" "$ASSET"
+          --title "v${{ needs.check.outputs.version }}"
+          --generate-notes
+          --target "$GITHUB_SHA"
