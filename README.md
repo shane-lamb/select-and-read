@@ -40,10 +40,10 @@ dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 For ARM64 Windows, use `-r win-arm64` (~147 MB). Do not enable trimming — it breaks
 WinForms' reflection over designer types.
 
-The build works from macOS and Linux as well as Windows (`EnableWindowsTargeting` in the
-csproj), which is useful for compile-checking, though the app itself only runs on Windows.
-
-Unsigned binaries trigger a SmartScreen warning on first run: *More info → Run anyway*.
+That command works from macOS and Linux as well as Windows (`EnableWindowsTargeting` in
+the csproj) — it produces the same shippable Windows exe wherever you run it, which is how
+CI builds the release and how `deploy.sh` builds what it sends to the test VM. Only
+*running* the exe needs Windows.
 
 ## Cutting a release
 
@@ -59,6 +59,9 @@ tests, publishes a self-contained `win-x64` exe and attaches it to a new
 `v2` release. A push to `main` that does not change the version is skipped, so there is no
 risk in pushing ordinary commits. The running version is shown at the bottom of the tray
 menu.
+
+The release body is a single *see the full list of commits* link to the compare view
+against the previous release, rather than a copy of the changelog.
 
 ## Deploying to the test VM
 

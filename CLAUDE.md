@@ -38,8 +38,11 @@ property is the only place the version is written; nothing else needs updating, 
 
 ## Development happens on a Mac; the app only runs on Windows
 
-Builds work on macOS via `EnableWindowsTargeting` in the csproj, so compile errors are
-caught locally, but nothing can be *run* here. Two consequences shape everything:
+`EnableWindowsTargeting` in the csproj makes the Windows-targeted project build on macOS —
+and this goes all the way to a shippable artifact, not just a compile check: the
+`--self-contained -p:PublishSingleFile=true` publish for a Windows RID works here too, and
+is what `tests/vm/deploy.sh` and the release workflow both use. **The boundary is running,
+not building** — nothing can be executed here. Two consequences shape everything:
 
 - `TextCleaner` and `RealtimeProtocol` are deliberately pure and free of Windows APIs.
   `tests/TextCleaner.Tests` and `tests/RealtimeProtocol.Tests` target plain `net10.0` and

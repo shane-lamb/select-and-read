@@ -567,6 +567,20 @@ Releases are cut by `.github/workflows/release.yml`:
 
 So the entire release process is: bump the integer, push to `main`.
 
+**The release body is a single link — *see the full list of commits*, pointing at the
+compare view against the previous tag — and nothing else.** The changelog already exists
+in git; restating it on the release page means maintaining a second copy that can only
+ever be less accurate than the first.
+
+`gh release create --generate-notes` was the alternative and is the wrong fit regardless
+of length: it lists merged *pull requests*, and work here often goes straight to `main`,
+so a commit that skipped a PR would be missing from its own release notes. The compare
+link cannot omit anything.
+
+The previous tag comes from `git describe --tags --abbrev=0`, which is correct precisely
+because the new tag does not exist yet when the body is built. With no tags at all there
+is nothing to compare against, so the link degrades to the tag's full commit list.
+
 The version is surfaced in the tray menu as a disabled item above *Exit*, read from
 `AssemblyInformationalVersionAttribute` at runtime, so a user can name their build without
 finding the exe. This is also why the csproj sets
