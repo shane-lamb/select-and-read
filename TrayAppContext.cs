@@ -387,7 +387,7 @@ internal sealed class TrayAppContext : ApplicationContext
                 Alignment = StringAlignment.Center,
                 LineAlignment = StringAlignment.Center,
             };
-            g.DrawString("A", font, fore, new RectangleF(0, 0, 32, 32), format);
+            g.DrawString("S", font, fore, new RectangleF(0, 0, 32, 32), format);
         }
 
         // Icon.FromHandle does not take ownership, so clone into a managed icon and
