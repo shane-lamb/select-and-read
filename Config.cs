@@ -57,8 +57,7 @@ internal sealed class Config
     /// </summary>
     internal const string DefaultCloudPrompt =
         "Your task is to read ALL the text within the image aloud, verbatim and in natural reading order. " +
-        "Speak slowly and clearly. " +
-        "Get to the task right away - don't introduce it.";
+        "Speak clearly.";
 
     [JsonIgnore]
     public Hotkey Capture => Hotkey.ParseOrDefault(CaptureHotkey, Hotkey.DefaultCapture);
