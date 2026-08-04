@@ -29,7 +29,7 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox _useCloud = new();
     private readonly TextBox _apiKey = new();
     private readonly ComboBox _cloudModel = new();
-    private readonly TextBox _cloudVoice = new();
+    private readonly ComboBox _cloudVoice = new();
     private readonly CheckBox _overridePrompt = new();
     private readonly TextBox _cloudPrompt = new();
     private string _customPrompt = string.Empty;
@@ -425,9 +425,9 @@ internal sealed class SettingsForm : Form
         SelectModel(config.CloudModel);
         AddRow("Model", _cloudModel);
 
-        _cloudVoice.Text = string.IsNullOrWhiteSpace(config.CloudVoice)
-            ? Config.DefaultCloudVoice
-            : config.CloudVoice;
+        _cloudVoice.DropDownStyle = ComboBoxStyle.DropDownList;
+        foreach (var voice in CloudVoices) _cloudVoice.Items.Add(voice);
+        SelectCloudVoice(config.CloudVoice);
         AddRow("Cloud voice", _cloudVoice);
 
         AddCheck(_overridePrompt, "Override default reading prompt", config.OverrideCloudPrompt);
@@ -476,6 +476,24 @@ internal sealed class SettingsForm : Form
             _cloudPrompt.BackColor = SystemColors.Control;
             _cloudPrompt.Text = Config.DefaultCloudPrompt;
         }
+    }
+
+    /// <summary>
+    /// The voices the Realtime API accepts, from its documented list. Unlike the local
+    /// voices (SPEC 7.2) there is nothing to enumerate at runtime, so this is a hardcoded
+    /// list that has to be updated when OpenAI adds one:
+    /// https://developers.openai.com/api/docs/guides/realtime-conversations#voice-options
+    /// </summary>
+    private static readonly string[] CloudVoices =
+    [
+        "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse",
+    ];
+
+    private void SelectCloudVoice(string? voice)
+    {
+        if (string.IsNullOrWhiteSpace(voice)) voice = Config.DefaultCloudVoice;
+        if (!_cloudVoice.Items.Contains(voice)) _cloudVoice.Items.Add(voice);
+        _cloudVoice.SelectedItem = voice;
     }
 
     private void SelectModel(string? id)
@@ -563,7 +581,7 @@ internal sealed class SettingsForm : Form
         StartWithWindows = _startWithWindows.Checked,
         UseCloudEngine = _useCloud.Checked,
         CloudModel = (_cloudModel.SelectedItem as ModelItem)?.Id ?? Config.DefaultCloudModel,
-        CloudVoice = _cloudVoice.Text,
+        CloudVoice = _cloudVoice.SelectedItem as string ?? Config.DefaultCloudVoice,
         OverrideCloudPrompt = _overridePrompt.Checked,
         CloudPrompt = _overridePrompt.Checked ? _cloudPrompt.Text : _customPrompt,
     };
