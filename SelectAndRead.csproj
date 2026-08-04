@@ -18,7 +18,7 @@
          it back out of this file, and publishes a tagged Release when it has changed.
          Note that app.manifest carries its own version - that is the Win32 side-by-side
          identity, which is unrelated and deliberately left alone. -->
-    <Version>2</Version>
+    <Version>3</Version>
     <!-- Spelled out rather than left to default from Version, which would hand Roslyn a
          major-only "1" to validate as an assembly version. The tray menu reads
          InformationalVersion, which does default from Version and stays the bare integer. -->
