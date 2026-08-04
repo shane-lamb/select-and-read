@@ -54,12 +54,12 @@ internal static class RealtimeProtocol
         });
 
     /// <summary>
-    /// The crop plus the reading prompt, as a single user message.
+    /// The crop, as a user message.
     ///
-    /// The image goes first: the prompt reads as an instruction about the image that
-    /// precedes it, which is the ordering the vision models are trained on.
+    /// The reading prompt deliberately does *not* appear here - it belongs in the session
+    /// instructions.
     /// </summary>
-    internal static string BuildImageItem(byte[] png, string prompt) =>
+    internal static string BuildImageItem(byte[] png) =>
         JsonSerializer.Serialize(new
         {
             type = "conversation.item.create",
@@ -75,7 +75,6 @@ internal static class RealtimeProtocol
                         image_url = "data:image/png;base64," + Convert.ToBase64String(png),
                         detail = "high",
                     },
-                    new { type = "input_text", text = prompt },
                 },
             },
         });

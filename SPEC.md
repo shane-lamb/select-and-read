@@ -692,8 +692,8 @@ One WebSocket per reading to `wss://api.openai.com/v1/realtime?model=…`, authe
 a bearer token. The session is configured for `output_modalities: ["audio"]`, PCM at 24 kHz
 mono, and **turn detection disabled** — the app never sends microphone audio, and server VAD
 left on makes the model wait for speech that never arrives. Then one
-`conversation.item.create` carrying the crop as a `data:image/png;base64,…` URI followed by
-the reading prompt, and one `response.create`.
+`conversation.item.create` carrying the crop as a `data:image/png;base64,…` URI, and one
+`response.create`.
 
 Frame construction and parsing live in `RealtimeProtocol`, which is pure and free of both
 sockets and Windows APIs — the same discipline as `TextCleaner`, for the same reason, and it

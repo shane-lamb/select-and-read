@@ -95,7 +95,7 @@ internal sealed class RealtimeReadingEngine : IReadingEngine
             await ConnectAsync(socket, RealtimeProtocol.EndpointFor(_model), token);
 
             await SendAsync(socket, RealtimeProtocol.BuildSessionUpdate(_voice, _prompt), token);
-            await SendAsync(socket, RealtimeProtocol.BuildImageItem(png, _prompt), token);
+            await SendAsync(socket, RealtimeProtocol.BuildImageItem(png), token);
             await SendAsync(socket, RealtimeProtocol.BuildResponseCreate(), token);
 
             await foreach (var frame in ReceiveAsync(socket, token))

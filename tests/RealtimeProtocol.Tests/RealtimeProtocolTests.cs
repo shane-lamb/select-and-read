@@ -42,11 +42,11 @@ public class RealtimeProtocolTests
     }
 
     [Fact]
-    public void ImageItemCarriesThePngAsADataUriAheadOfThePrompt()
+    public void ImageItemCarriesThePngAsADataUri()
     {
         var png = new byte[] { 1, 2, 3, 250, 251, 252 };
 
-        var content = Property(RealtimeProtocol.BuildImageItem(png, "Read this aloud."), "item")
+        var content = Property(RealtimeProtocol.BuildImageItem(png), "item")
             .GetProperty("content");
 
         var image = content[0];
@@ -54,26 +54,32 @@ public class RealtimeProtocolTests
         Assert.Equal(
             "data:image/png;base64," + Convert.ToBase64String(png),
             image.GetProperty("image_url").GetString());
+    }
 
-        // Prompt second: it reads as an instruction about the image that precedes it.
-        var text = content[1];
-        Assert.Equal("input_text", text.GetProperty("type").GetString());
-        Assert.Equal("Read this aloud.", text.GetProperty("text").GetString());
+    [Fact]
+    public void ImageItemCarriesNothingButTheImage()
+    {
+        // The prompt lives in the session instructions and nowhere else. Restoring it here
+        // would make the turn read as a request, which theoreticlly could produce spoken preambles
+        // like "ok, let me read that for you" before the response had begun.
+        var content = Property(RealtimeProtocol.BuildImageItem([0]), "item")
+            .GetProperty("content");
+
+        Assert.Equal(1, content.GetArrayLength());
     }
 
     [Fact]
     public void PromptsWithJsonMetacharactersSurviveTheRoundTrip()
     {
         // The prompt is user-editable in Settings, so it is untrusted input as far as
-        // frame construction is concerned.
+        // frame construction is concerned. It reaches the wire as the session instructions.
         const string prompt = "Say \"hello\" \\ {not json} \n verbatim";
 
-        var text = Property(RealtimeProtocol.BuildImageItem([0], prompt), "item")
-            .GetProperty("content")[1]
-            .GetProperty("text")
+        var instructions = Property(RealtimeProtocol.BuildSessionUpdate("marin", prompt), "session")
+            .GetProperty("instructions")
             .GetString();
 
-        Assert.Equal(prompt, text);
+        Assert.Equal(prompt, instructions);
     }
 
     [Fact]
