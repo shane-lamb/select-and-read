@@ -9,8 +9,9 @@
 ## 1. Overview
 
 A tray-resident Windows utility. Press a hotkey, drag a rectangle over any part of the
-screen, and the text inside it is recognised and read aloud immediately. Press ESC or a
-stop hotkey to stop reading.
+screen, and the text inside it is recognised and read aloud immediately. A second hotkey
+pauses and resumes the reading, and replays the last one once it has finished; ESC stops it
+outright.
 
 The feature set is deliberately small. Essentially all of the engineering value is in
 details that are easy to get wrong and very visible when they are: DPI correctness on a
@@ -34,14 +35,15 @@ user stuck.
 **In scope for v1**
 
 - Hotkey → drag-select → OCR → speak
-- Stop via ESC, a stop hotkey, the tray menu, or re-pressing the capture hotkey
+- Pause, resume and replay-last-reading, on one hotkey (§2.5)
+- Stop via ESC, the tray menu, or re-pressing the capture hotkey
 - Recognised text also copied to the clipboard
 - Settings: hotkeys, voice, speaking rate, OCR language, and toggles
 
 **Out of scope for v1**
 
-Pause/resume, replay-last-capture, cloud AI backends, translation, file or PDF input,
-an installer, code signing, and reading a whole window or the full screen without dragging.
+Translation, file or PDF input, an installer, code signing, and reading a whole window or
+the full screen without dragging.
 
 **Single monitor only.** The app supports the primary monitor and nothing else: the
 overlay covers it, and only it, so selections can only be drawn there. On a multi-monitor
@@ -61,7 +63,14 @@ disproportionate amount of the app's total risk for a feature that was not requi
 | **Idle** | Tray icon only. No windows. |
 | **Selecting** | Full-screen overlay is up; user is dragging. |
 | **Working** | Overlay closed; capture is being OCR'd. Typically well under a second. |
-| **Speaking** | Audio is playing. |
+| **Speaking** | A reading is live — audio is playing, or is about to be. |
+| **Paused** | A live reading is held mid-word, resumable from exactly where it stopped. |
+
+**Speaking is entered before any audio exists**, because recognition and the cloud request
+both happen inside it. Nothing in the pipeline cares about the difference, but the playback
+hotkey does — pausing a reading that has not started talking would be indistinguishable from
+the app having hung — so it asks the engine whether audio is actually live rather than
+reading the state alone (§2.5).
 
 The app is a single instance, enforced with a named mutex. Launching a second copy
 surfaces the settings window of the running instance rather than starting a new one.
@@ -119,11 +128,52 @@ crop → upscale → OCR → clean → clipboard → speak
 **Performance target:** first spoken word within ~700 ms of mouse-up for a
 paragraph-sized selection on typical hardware.
 
-### 2.5 Stopping speech
+### 2.5 Pausing, resuming, replaying and stopping
 
-Any of: ESC (from anywhere), the **stop hotkey** (default `Ctrl+Shift+F10`), the tray
-menu's *Stop* item, or pressing the **capture hotkey** again — which stops the current
-reading and immediately begins a new selection.
+One **playback hotkey** (default `Ctrl+Shift+F10`) means whichever of pause, resume and
+replay fits the current state:
+
+| State when pressed | Effect |
+|---|---|
+| Speaking, audio actually playing | Pause |
+| Paused | Resume from the same word |
+| Idle, with a reading retained | Replay it from the beginning |
+| Speaking, but still recognising or connecting | Nothing |
+| Selecting, Working, or Idle with nothing retained | Nothing |
+
+**One hotkey rather than several.** Pause, resume and replay are never simultaneously
+meaningful, so splitting them across separate bindings would only add combinations to
+remember for a tool whose users cannot read the tray menu to remind themselves. Abandoning a
+reading outright is the one playback action this hotkey does not cover; ESC and re-pressing
+capture do that.
+
+**Pausing must be told apart from stopping in the playback layer, not just in the state
+machine.** They look similar — both begin with `MediaPlayer.Pause()` — but stopping also
+cancels the token source, drops the `MediaSource` and settles the pending completion, after
+which there is nothing left to resume. Pause touches none of those three.
+
+**Nothing happens when a reading has not started talking yet.** Speaking is entered before
+recognition and before the cloud request (§2.1), so the state alone does not say whether
+there is audio to hold; the engine's "is a reading live" flag does. Pausing silence would
+present as a hang, and ESC already covers aborting a slow cloud call, since the ESC hook is
+installed for the whole of Speaking and not just for the audible part of it.
+
+**Stopping** is ESC (from anywhere), the tray menu's *Stop* item, or pressing the **capture
+hotkey** again — which stops the current reading and immediately begins a new selection. ESC
+stays a hard stop and never becomes a toggle: principle 3 wants one fixed, always-known way
+out, and a key that sometimes resumes what you were trying to escape is not that.
+
+**A stopped reading stays replayable.** Retained audio is dropped only when the next reading
+starts, so "playback hotkey with nothing playing" means replay-from-the-top however the last
+reading ended — whether it finished on its own or the user cut it short. The alternative,
+clearing the retention on a deliberate stop, makes the hotkey's meaning depend on history the
+user has to remember.
+
+**How a replay is produced differs by engine, and has to.** The local engine keeps the text
+and re-synthesises: synthesis is local, free and quick, so holding megabytes of PCM to save a
+few hundred milliseconds would be the wrong trade. The cloud engine cannot do that — a second
+request costs real money (§14.1) and would not return the same reading — so it keeps the PCM
+it already received (§14.3).
 
 ### 2.6 Failure feedback
 
@@ -350,11 +400,22 @@ two sentences, begin playing group 1 while group 2 synthesises, and append items
 Synthesis therefore sits behind an interface from the start so that this substitution is
 local, but chunking is **not** built until measurement justifies it.
 
-### 7.5 Stopping
+### 7.5 Stopping, and why pausing is not a variant of it
 
 `MediaPlayer.Pause()`, cancel the synthesis `CancellationTokenSource`, and dispose the
 current stream and playback list. Stopping must be immediate and must be safe to call in
 any state, including when nothing is playing.
+
+**Pausing (§2.5) is a separate operation, not a flag on this one.** It calls
+`MediaPlayer.Pause()` and stops there: the token source, the `MediaSource` and the pending
+completion are all left intact, which is precisely what makes the utterance resumable and
+keeps the awaiting `SpeakAsync` alive. Reusing the stop path with a "don't tear down" flag
+would put the two behaviours one boolean apart in a method whose entire job is tearing down.
+
+**"Is speaking" therefore has to mean "a reading is live", not "audio is audible right
+now"** — it stays true across a pause. That is the flag §2.5's dispatch relies on to tell a
+pausable reading from one still being synthesised, and it only works because pausing settles
+nothing.
 
 ---
 
@@ -373,7 +434,7 @@ Registration failure raises a tray balloon naming the specific hotkey (see §2.6
 | Action | Default |
 |---|---|
 | Capture | `Ctrl+Shift+F9` |
-| Stop | `Ctrl+Shift+F10` |
+| Pause / resume / replay | `Ctrl+Shift+F10` |
 
 Function keys are chosen deliberately. `Ctrl+Alt+<letter>` collides with AltGr on
 international keyboard layouts, where AltGr generates Ctrl+Alt — such a hotkey would break
@@ -384,6 +445,12 @@ that applications commonly use. Both defaults are user-configurable.
 
 A `WH_KEYBOARD_LL` low-level keyboard hook, installed **only** for the duration of
 playback and removed as soon as speech stops.
+
+"For the duration of playback" spans **Speaking and Paused alike** (§2.1). A paused reading
+is still a reading the user has to be able to abandon, and it is the one state where they
+might sit for a while — so dropping the hook on pause would take away the escape at the exact
+moment it is most likely to be wanted. It is still never installed while Idle, which is the
+property that matters: the hook exists only while the app has something to escape from.
 
 The hook **always** calls `CallNextHookEx` — it observes ESC and never swallows it, so
 the foreground application still receives its own ESC. A permanently installed hook is
@@ -421,7 +488,7 @@ missing or unparseable file falls back to defaults rather than failing to start.
 | Setting | Default |
 |---|---|
 | Capture hotkey | `Ctrl+Shift+F9` |
-| Stop hotkey | `Ctrl+Shift+F10` |
+| Pause hotkey (pause, resume, replay — §2.5) | `Ctrl+Shift+F10` |
 | OCR language | user profile default |
 | Voice id | best available (see §7.2) |
 | Speaking rate | 1.0 |
@@ -485,7 +552,7 @@ Per-Monitor-V2 DPI awareness and long-path awareness.
 | `SelectionOverlay.cs` | The overlay form — largest and most detail-sensitive file |
 | `OcrService.cs` | Upscale, `SoftwareBitmap` conversion, recognition |
 | `TextCleaner.cs` | Pure functions: joining, de-hyphenation, junk stripping |
-| `SpeechService.cs` | Synthesiser + `MediaPlayer`, voice, rate, stop |
+| `SpeechService.cs` | Synthesiser + `MediaPlayer`, voice, rate, pause/resume/stop |
 | `ReadingEngine.cs` | `IReadingEngine` seam + `LocalReadingEngine` (OCR → cleanup → speech) |
 | `RealtimeProtocol.cs` | Pure functions: Realtime frame construction and parsing (§14.2) |
 | `RealtimeClient` (in `RealtimeReadingEngine.cs`) | WebSocket transport, fallback policy |
@@ -648,7 +715,11 @@ manual checklist:
 - The settings dialog's *appearance*. Its geometry is now checked by `--settings-metrics`
   (§10.1) at both 1024×768 and 3840×1926, but nothing confirms it looks right, and it has
   not been exercised at a raised system text size — historically where this dialog breaks.
-- ESC and stop-hotkey cancellation mid-playback.
+- ESC cancellation mid-playback.
+- **Pause, resume and replay (§2.5), on either engine.** Nothing here has run: whether
+  `MediaPlayer.Pause()` resumes a `MediaStreamSource` mid-stream without a gap or a click is
+  the largest unknown, and holding a cloud reading paused past the 60 s receive timeout is
+  the second.
 - Clipboard contents after a capture.
 - Protected/DRM content capturing black (§3.1).
 - Whether first-word latency meets the ~700 ms target (§7.4).
@@ -727,6 +798,21 @@ Leaving `request.Sample` null is how `MediaStreamSource` is told the stream has 
 is no separate "finished" call. That null path is therefore the normal end of every reading,
 not an error path.
 
+**Pausing a stream source works, with one catch.** `MediaPlayer.Pause()` simply stops the
+sample requests; the socket carries on filling the channel, and the queued chunks are there
+waiting on resume. The catch is that playback auto-starts on the *first* chunk, so that call
+has to be suppressed while paused — otherwise a chunk landing during a pause restarts the
+audio on its own.
+
+**Every chunk is retained so the reading can be replayed** (§2.5). Consumed samples are
+dropped by the source and `CanSeek` is false, so replay means feeding a fresh player the
+whole sequence again — which also means pause and resume behave identically on a replay and
+on a live reading. Re-requesting the audio instead would charge the user a second time for
+something they have already paid for, and would not return the same reading.
+At 24 kHz mono 16-bit the retention costs 48 KB per second — around 14 MB for a five-minute
+reading, an order of magnitude below the freeze frame the pipeline already takes care to
+release — and it is dropped when the next reading starts.
+
 ### 14.4 Failure and fallback
 
 A cloud failure falls back to the local engine, **but only if nothing was spoken yet**.
@@ -761,3 +847,5 @@ saved-password stores offer, and the right level for a tray utility.
 | Can a vision-language model replace OCR *and* synthesis in one call? | **Resolved: yes, on OpenAI only.** `gpt-realtime-2.1-mini` takes an image and streams audio back (§14.1). No Anthropic model can — every Claude model is text out only. |
 | What does a cloud reading actually cost? | **Open.** Estimated at ~$0.017 (§14.1) from inferred image-token counts. `--read-file` prints real `usage`; replace the estimate with measurement. |
 | Does `MediaStreamSource` stream PCM cleanly on ARM64? | **Open.** The highest-risk untested piece of §14.3; underruns or clicks would show up here first. |
+| Does resuming a paused `MediaStreamSource` pick up cleanly mid-stream? | **Open.** Pausing a live source is the one part of §2.5 with no local equivalent to fall back on. A gap, a click or a dropped chunk on resume shows up here; the local engine's seekable stream is not at risk in the same way. |
+| Does a cloud reading survive being paused past the 60 s receive timeout? | **Open.** It should: the timeout caps silence *from the server*, and the socket finishes independently of playback, so a pause should not reach it. Untested (§13.4). |

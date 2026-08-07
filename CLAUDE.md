@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A Windows 10/11 tray utility: press a hotkey, drag a rectangle on screen, and the text
-inside it is OCR'd and read aloud.
+inside it is OCR'd and read aloud. A second hotkey pauses, resumes and replays.
 
 `SPEC.md` is the design document and carries the reasoning behind every decision below.
 When changing behaviour, update it — several sections record findings measured on real
@@ -60,7 +60,7 @@ and an unhidden driver console covers the desktop and gets captured instead of y
 ## Architecture
 
 Pipeline: **hotkey → freeze-frame capture → overlay drag → crop → upscale → OCR → clean →
-clipboard → speak**. `TrayAppContext` owns the Idle/Selecting/Working/Speaking state
+clipboard → speak**. `TrayAppContext` owns the Idle/Selecting/Working/Speaking/Paused state
 machine and sequences all of it; the other classes are single-purpose and independently
 testable via the debug CLI modes.
 
@@ -154,7 +154,36 @@ only way an unfocused overlay can be dismissed at all.
 
 **The ESC hook must always call `CallNextHookEx`** (SPEC §8.3). It observes ESC without
 consuming it, so the foreground app still receives its own key, and it is installed only for
-the duration of playback or the overlay — never process-wide.
+the duration of playback or the overlay — never process-wide. "Playback" includes Paused: a
+paused reading is the state a user is most likely to sit in, so it is the worst one to have
+no escape from.
+
+**`Stop()` tears down; `Pause()` must not** (SPEC §7.5). The two look similar — both start
+with `MediaPlayer.Pause()` — but `Stop()` also cancels the token source, drops the
+`MediaSource` and settles the pending completion, after which there is nothing to resume.
+`Pause()` does none of those three, on either `SpeechService` or `RealtimeAudioPlayer`.
+Folding pause into stop behind a flag puts them one boolean apart in a method whose whole
+job is tearing down.
+
+**`IsSpeaking` means "a reading is live", not "audio is audible"** — it stays true across a
+pause, which is a consequence of the rule above and is load-bearing for
+`TrayAppContext.OnPlaybackHotkey`. Speaking is entered *before* OCR or the cloud request, so
+the state alone cannot say whether there is anything to pause; the flag can. Pausing a
+reading that has not started talking presents as a hang.
+
+**A stopped reading stays replayable; only a new reading discards it** (SPEC §2.5). Neither
+engine's `Stop()` may clear its retention — `DiscardReplay()` and the top of `ReadAsync` are
+the only places that do. This is what makes the playback hotkey mean the same thing however
+the last reading ended.
+
+**The two engines replay by different means, deliberately.** `LocalReadingEngine` keeps the
+text and re-synthesises (local, free, quick — retaining audio to save a few hundred
+milliseconds would be the wrong trade). `RealtimeReadingEngine` keeps the PCM chunks, because
+re-requesting would charge the user twice for the same page and would not return the same
+reading. Never "simplify" the cloud path into a second API call. It also means the cloud
+engine holds ~48 KB per second of reading, which is why `ApplyEngineSettings` clears
+`_lastSpoken` when it disposes the engine that pointer refers to — replaying through a
+disposed engine throws from the `CancellationTokenSource` before it reaches any audio.
 
 **Upscale decisions come from measured glyph height, never crop size** (SPEC §5.2).
 Enlarging helps small text and *harms* text the engine already reads cleanly — at 4x a

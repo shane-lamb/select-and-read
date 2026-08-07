@@ -43,6 +43,7 @@ internal sealed class RealtimeAudioPlayer : IDisposable
     private MediaSource? _mediaSource;
     private TimeSpan _position;
     private bool _started;
+    private bool _paused;
     private int _stopped;
 
     internal RealtimeAudioPlayer()
@@ -83,7 +84,43 @@ internal sealed class RealtimeAudioPlayer : IDisposable
             _started = true;
             _mediaSource = MediaSource.CreateFromMediaStreamSource(_source);
             _player.Source = _mediaSource;
+
+            // Chunks keep arriving from the socket while playback is paused, so this must
+            // not be an unconditional Play: otherwise a chunk landing during a pause would
+            // silently start the audio again.
+            if (!_paused) _player.Play();
+        }
+    }
+
+    /// <summary>
+    /// Holds playback where it is. Sample requests stop; the socket carries on filling the
+    /// channel, which simply queues up for the resume.
+    /// </summary>
+    internal void Pause()
+    {
+        _paused = true;
+
+        try
+        {
+            _player.Pause();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Racing with Dispose is harmless here.
+        }
+    }
+
+    internal void Resume()
+    {
+        _paused = false;
+        if (!_started) return;
+
+        try
+        {
             _player.Play();
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 

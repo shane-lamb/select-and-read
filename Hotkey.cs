@@ -12,7 +12,7 @@ internal sealed record Hotkey(uint Modifiers, uint VirtualKey)
     internal static readonly Hotkey DefaultCapture =
         new(Native.MOD_CONTROL | Native.MOD_SHIFT, (uint)Keys.F9);
 
-    internal static readonly Hotkey DefaultStop =
+    internal static readonly Hotkey DefaultPlayback =
         new(Native.MOD_CONTROL | Native.MOD_SHIFT, (uint)Keys.F10);
 
     internal static bool TryParse(string? text, out Hotkey hotkey)

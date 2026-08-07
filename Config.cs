@@ -8,7 +8,9 @@ namespace SelectAndRead;
 internal sealed class Config
 {
     public string CaptureHotkey { get; set; } = Hotkey.DefaultCapture.ToString();
-    public string StopHotkey { get; set; } = Hotkey.DefaultStop.ToString();
+
+    /// <summary>Pause, resume and replay (SPEC 2.5).</summary>
+    public string PlaybackHotkey { get; set; } = Hotkey.DefaultPlayback.ToString();
 
     /// <summary>BCP-47 tag, or null for the user profile default.</summary>
     public string? OcrLanguage { get; set; }
@@ -63,7 +65,7 @@ internal sealed class Config
     public Hotkey Capture => Hotkey.ParseOrDefault(CaptureHotkey, Hotkey.DefaultCapture);
 
     [JsonIgnore]
-    public Hotkey Stop => Hotkey.ParseOrDefault(StopHotkey, Hotkey.DefaultStop);
+    public Hotkey Playback => Hotkey.ParseOrDefault(PlaybackHotkey, Hotkey.DefaultPlayback);
 
     // --- Persistence ------------------------------------------------------------
 

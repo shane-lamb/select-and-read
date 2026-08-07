@@ -10,9 +10,23 @@ namespace SelectAndRead;
 /// </summary>
 internal interface ISpeechEngine : IDisposable
 {
+    /// <summary>
+    /// True from the moment playback starts until the utterance ends, is stopped or fails -
+    /// including while it is paused. It means "there is a live utterance", not "audio is
+    /// audible right now", which is what lets a caller tell a pausable reading apart from
+    /// one that is still being synthesised.
+    /// </summary>
     bool IsSpeaking { get; }
+
     void ApplySettings(Config config);
     Task SpeakAsync(string text, CancellationToken cancellationToken);
+
+    /// <summary>Holds playback where it is, leaving it resumable (SPEC 2.5).</summary>
+    void Pause();
+
+    /// <summary>Continues from where <see cref="Pause"/> left off.</summary>
+    void Resume();
+
     void Stop();
 }
 
@@ -109,6 +123,39 @@ internal sealed class SpeechService : ISpeechEngine
         finally
         {
             ReleaseSource();
+        }
+    }
+
+    /// <summary>
+    /// Pausing differs from <see cref="Stop"/> in what it leaves alone: the token source,
+    /// the MediaSource and the pending completion all stay exactly as they are, so the
+    /// awaited SpeakAsync is still running and Resume picks up mid-word. Stop tears all
+    /// three down, which is why it cannot be reused here (SPEC 7.5).
+    /// </summary>
+    public void Pause()
+    {
+        if (!IsSpeaking) return;
+
+        try
+        {
+            _player.Pause();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Racing with Dispose is harmless here.
+        }
+    }
+
+    public void Resume()
+    {
+        if (!IsSpeaking) return;
+
+        try
+        {
+            _player.Play();
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 

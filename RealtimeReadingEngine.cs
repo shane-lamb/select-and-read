@@ -42,9 +42,24 @@ internal sealed class RealtimeReadingEngine : IReadingEngine
     private RealtimeAudioPlayer? _player;
     private CancellationTokenSource? _cts;
 
+    /// <summary>
+    /// Every PCM chunk this reading produced, kept so it can be played again without a
+    /// second request. Unlike the local engine, which replays by re-synthesising from the
+    /// retained text, this one cannot regenerate its audio: another call would cost real
+    /// money (SPEC 14.1) and would not return the same reading anyway. At 24kHz mono 16-bit
+    /// that is 48KB per second - a five-minute reading holds around 14MB, an order of
+    /// magnitude less than the freeze frame the pipeline already goes out of its way to
+    /// release, and it is dropped the moment the next reading starts.
+    /// </summary>
+    private readonly List<byte[]> _retained = new();
+
     internal RealtimeReadingEngine(string apiKey) => _apiKey = apiKey;
 
     public bool IsSpeaking => _player?.IsPlaying ?? false;
+
+    public bool CanReplay => _retained.Count > 0;
+
+    public void DiscardReplay() => _retained.Clear();
 
     public void ApplySettings(Config config)
     {
@@ -68,6 +83,10 @@ internal sealed class RealtimeReadingEngine : IReadingEngine
         Bitmap crop, CancellationToken cancellationToken)
     {
         Stop();
+
+        // A new reading is the one thing that supersedes the last one; every other way a
+        // reading can end leaves it replayable.
+        _retained.Clear();
 
         // Encode before anything touches the network so the caller can release the freeze
         // frame immediately, rather than holding tens of megabytes for the whole reading
@@ -104,6 +123,7 @@ internal sealed class RealtimeReadingEngine : IReadingEngine
                 {
                     case RealtimeProtocol.Event.Audio audio:
                         if (firstAudio == TimeSpan.Zero) firstAudio = clock.Elapsed;
+                        _retained.Add(audio.Pcm);
                         player.Append(audio.Pcm);
                         break;
 
@@ -151,6 +171,48 @@ internal sealed class RealtimeReadingEngine : IReadingEngine
         var spoken = transcript.ToString().Trim();
         return (spoken.Length == 0 ? null : spoken,
                 new Diagnostics(firstAudio, clock.Elapsed, usage));
+    }
+
+    /// <summary>
+    /// Plays the retained audio again. This is the tail of <see cref="ReadDetailedAsync"/>
+    /// with no socket in front of it: the chunks are already in hand, so they go into a
+    /// fresh player all at once and it drains them at its own pace. Playback still starts on
+    /// the first chunk, so pause and resume behave exactly as they do on a live reading.
+    /// </summary>
+    public async Task ReplayAsync(CancellationToken cancellationToken)
+    {
+        if (_retained.Count == 0) return;
+
+        Stop();
+
+        var previous = _cts;
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        previous?.Dispose();
+
+        var token = _cts.Token;
+        var player = new RealtimeAudioPlayer();
+        _player = player;
+
+        try
+        {
+            foreach (var chunk in _retained) player.Append(chunk);
+            player.CompleteInput();
+            await player.WaitForCompletionAsync(token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // Our own Stop(). Not an error to report.
+        }
+        finally
+        {
+            player.Stop();
+            player.Dispose();
+            if (ReferenceEquals(_player, player)) _player = null;
+        }
     }
 
     private static async Task ConnectAsync(ClientWebSocket socket, Uri endpoint, CancellationToken token)
@@ -223,6 +285,14 @@ internal sealed class RealtimeReadingEngine : IReadingEngine
         _ => "Could not reach the reading service: " + ex.Message,
     };
 
+    public void Pause() => _player?.Pause();
+
+    public void Resume() => _player?.Resume();
+
+    /// <summary>
+    /// Note that this does not touch <see cref="_retained"/>: a stopped reading stays
+    /// replayable, and only a new reading clears it.
+    /// </summary>
     public void Stop()
     {
         _cts?.Cancel();

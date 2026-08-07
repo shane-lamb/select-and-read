@@ -13,6 +13,12 @@ namespace SelectAndRead;
 /// </summary>
 internal interface IReadingEngine : IDisposable
 {
+    /// <summary>
+    /// True from the moment audio starts until the reading ends, is stopped or fails -
+    /// including while it is paused. It distinguishes a reading that can be paused from one
+    /// still in recognition or still connecting, which is the whole basis of the playback
+    /// hotkey's dispatch (SPEC 2.5).
+    /// </summary>
     bool IsSpeaking { get; }
 
     void ApplySettings(Config config);
@@ -22,19 +28,40 @@ internal interface IReadingEngine : IDisposable
     /// there was nothing to copy.
     ///
     /// A null return does not mean nothing was spoken: status messages ("No text found.")
-    /// are spoken by the engine but deliberately never reach the clipboard, which is the
-    /// behaviour the local pipeline has always had.
+    /// are spoken by the engine but deliberately never reach the clipboard.
     /// </summary>
     Task<string?> ReadAsync(Bitmap crop, CancellationToken cancellationToken);
+
+    /// <summary>Holds the reading where it is, leaving it resumable (SPEC 2.5).</summary>
+    void Pause();
+
+    /// <summary>Continues from where <see cref="Pause"/> left off.</summary>
+    void Resume();
+
+    /// <summary>Whether the last reading can still be played again from the beginning.</summary>
+    bool CanReplay { get; }
+
+    /// <summary>
+    /// Reads the last reading out again from the beginning. Nothing is returned for the
+    /// clipboard: the text went there when the reading was first produced, and a replay is
+    /// not new content.
+    /// </summary>
+    Task ReplayAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Drops whatever <see cref="ReplayAsync"/> would have played. Deliberately not part of
+    /// <see cref="Stop"/>: a stopped reading stays replayable, so the playback hotkey means
+    /// the same thing however the last reading ended (SPEC 2.5).
+    /// </summary>
+    void DiscardReplay();
 
     /// <summary>Immediate, and safe to call in any state including when idle (SPEC 7.5).</summary>
     void Stop();
 }
 
 /// <summary>
-/// The original pipeline: Windows OCR, text cleanup, then Windows speech synthesis
-/// (SPEC 5-7). Behaviour is unchanged from when this lived inline in TrayAppContext -
-/// including that the OCR engine is built lazily and cached, since construction is not free.
+/// The local pipeline: Windows OCR, text cleanup, then Windows speech synthesis (SPEC 5-7).
+/// The OCR engine is built lazily and cached, since construction is not free.
 /// </summary>
 internal sealed class LocalReadingEngine : IReadingEngine
 {
@@ -44,7 +71,18 @@ internal sealed class LocalReadingEngine : IReadingEngine
     private string? _ocrLanguage;
     private bool _upscale = true;
 
+    /// <summary>
+    /// What a replay says. Text, not audio: synthesis is local, free and quick, so keeping
+    /// megabytes of PCM alive to save a few hundred milliseconds would be the wrong trade.
+    /// The cloud engine cannot make that choice - see RealtimeReadingEngine.
+    /// </summary>
+    private string? _lastSpoken;
+
     public bool IsSpeaking => _speech.IsSpeaking;
+
+    public bool CanReplay => _lastSpoken is not null;
+
+    public void DiscardReplay() => _lastSpoken = null;
 
     public void ApplySettings(Config config)
     {
@@ -61,6 +99,10 @@ internal sealed class LocalReadingEngine : IReadingEngine
 
     public async Task<string?> ReadAsync(Bitmap crop, CancellationToken cancellationToken)
     {
+        // A new reading is the one thing that supersedes the last one; every other way a
+        // reading can end leaves it replayable.
+        _lastSpoken = null;
+
         _ocr ??= OcrService.Create(_ocrLanguage);
 
         if (_ocr is null)
@@ -80,6 +122,7 @@ internal sealed class LocalReadingEngine : IReadingEngine
             return null;
         }
 
+        _lastSpoken = text;
         await _speech.SpeakAsync(text, cancellationToken);
         return text;
     }
@@ -91,9 +134,22 @@ internal sealed class LocalReadingEngine : IReadingEngine
     /// </summary>
     internal async Task<string?> SpeakStatusAsync(string message, CancellationToken cancellationToken)
     {
+        // Retained like any other reading: "did it say no text found, or capture failed?" is
+        // exactly the question a user who missed it wants the replay hotkey to answer.
+        _lastSpoken = message;
         await _speech.SpeakAsync(message, cancellationToken);
         return null;
     }
+
+    public async Task ReplayAsync(CancellationToken cancellationToken)
+    {
+        if (_lastSpoken is not { } text) return;
+        await _speech.SpeakAsync(text, cancellationToken);
+    }
+
+    public void Pause() => _speech.Pause();
+
+    public void Resume() => _speech.Resume();
 
     public void Stop() => _speech.Stop();
 

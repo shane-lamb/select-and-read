@@ -7,12 +7,12 @@ namespace SelectAndRead;
 internal sealed class HotkeyManager : NativeWindow, IDisposable
 {
     private const int CaptureId = 1;
-    private const int StopId = 2;
+    private const int PlaybackId = 2;
 
     private readonly List<int> _registered = new();
 
     internal event Action? CapturePressed;
-    internal event Action? StopPressed;
+    internal event Action? PlaybackPressed;
 
     /// <summary>
     /// Names of hotkeys that could not be registered because another application already
@@ -27,12 +27,12 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
         CreateHandle(new CreateParams { Parent = new IntPtr(-3) }); // HWND_MESSAGE
     }
 
-    internal void Register(Hotkey capture, Hotkey stop)
+    internal void Register(Hotkey capture, Hotkey playback)
     {
         Unregister();
         Conflicts.Clear();
         TryRegister(CaptureId, capture);
-        TryRegister(StopId, stop);
+        TryRegister(PlaybackId, playback);
     }
 
     private void TryRegister(int id, Hotkey hk)
@@ -56,7 +56,7 @@ internal sealed class HotkeyManager : NativeWindow, IDisposable
             switch (m.WParam.ToInt32())
             {
                 case CaptureId: CapturePressed?.Invoke(); return;
-                case StopId: StopPressed?.Invoke(); return;
+                case PlaybackId: PlaybackPressed?.Invoke(); return;
             }
         }
         base.WndProc(ref m);

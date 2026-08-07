@@ -5,10 +5,12 @@ using System.Runtime.InteropServices;
 
 namespace SelectAndRead;
 
-/// <summary>Tray icon, menu and the Idle/Selecting/Working/Speaking state machine (SPEC 2.1).</summary>
+/// <summary>
+/// Tray icon, menu and the Idle/Selecting/Working/Speaking/Paused state machine (SPEC 2.1).
+/// </summary>
 internal sealed class TrayAppContext : ApplicationContext
 {
-    private enum State { Idle, Selecting, Working, Speaking }
+    private enum State { Idle, Selecting, Working, Speaking, Paused }
 
     private readonly NotifyIcon _tray;
     private readonly Icon _icon;
@@ -16,6 +18,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly LocalReadingEngine _local = new();
     private readonly EscapeWatcher _escape = new();
     private readonly ToolStripMenuItem _stopItem;
+    private readonly ToolStripMenuItem _replayItem;
 
     private Config _config;
 
@@ -23,6 +26,13 @@ internal sealed class TrayAppContext : ApplicationContext
     private RealtimeReadingEngine? _cloud;
 
     private State _state = State.Idle;
+
+    /// <summary>
+    /// Whichever engine produced the current or most recent audio. The playback hotkey needs
+    /// this because either engine could have spoken last - a cloud reading that failed before
+    /// saying anything hands over to the local one mid-capture (SPEC 14.4).
+    /// </summary>
+    private IReadingEngine? _lastSpoken;
 
     /// <summary>
     /// Incremented for each capture. Because stopping a reading resolves the previous
@@ -42,9 +52,15 @@ internal sealed class TrayAppContext : ApplicationContext
             Enabled = false,
         };
 
+        _replayItem = new ToolStripMenuItem("Replay last reading", null, (_, _) => BeginReplay())
+        {
+            Enabled = false,
+        };
+
         var menu = new ContextMenuStrip();
         menu.Items.Add(new ToolStripMenuItem("Read a selection", null, (_, _) => BeginCapture()));
         menu.Items.Add(_stopItem);
+        menu.Items.Add(_replayItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Settings...", null, (_, _) => ShowSettings()));
         menu.Items.Add(new ToolStripSeparator());
@@ -60,7 +76,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _tray.DoubleClick += (_, _) => BeginCapture();
 
         _hotkeys.CapturePressed += OnCaptureHotkey;
-        _hotkeys.StopPressed += StopSpeaking;
+        _hotkeys.PlaybackPressed += OnPlaybackHotkey;
         _escape.EscapePressed += StopSpeaking;
 
         ApplyEngineSettings();
@@ -81,6 +97,15 @@ internal sealed class TrayAppContext : ApplicationContext
 
         var key = _config.UseCloudEngine ? ApiKeyStore.Load() : null;
 
+        // The engine about to be discarded takes its retained audio with it, so nothing may
+        // still be pointing at it: replaying through a disposed engine throws from the
+        // CancellationTokenSource before it reaches the audio.
+        if (_cloud is not null && ReferenceEquals(_lastSpoken, _cloud))
+        {
+            _lastSpoken = null;
+            SetReplayEnabled(false);
+        }
+
         // Rebuilt unconditionally rather than reused: the key is immutable in the engine,
         // so a reused instance would keep authenticating with the old one after the user
         // pastes a new key. Construction is trivial here, unlike OcrService.
@@ -94,7 +119,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private void RegisterHotkeys()
     {
-        _hotkeys.Register(_config.Capture, _config.Stop);
+        _hotkeys.Register(_config.Capture, _config.Playback);
 
         // SPEC 2.6: a silently stolen hotkey makes the app look simply broken.
         if (_hotkeys.Conflicts.Count > 0)
@@ -118,8 +143,40 @@ internal sealed class TrayAppContext : ApplicationContext
     private void OnCaptureHotkey()
     {
         // SPEC 2.5: pressing capture while reading stops it and starts a fresh selection.
-        if (_state == State.Speaking) StopSpeaking();
+        if (_state is State.Speaking or State.Paused) StopSpeaking();
         BeginCapture();
+    }
+
+    /// <summary>
+    /// One hotkey, meaning whichever of pause, resume and replay fits the current state
+    /// (SPEC 2.5). Abandoning a reading outright is ESC's job, not this one's.
+    ///
+    /// The <see cref="IReadingEngine.IsSpeaking"/> test is what keeps this honest. Speaking
+    /// is entered before recognition or the cloud request even begins, so state alone cannot
+    /// tell a reading that is talking from one that has not started - and pausing something
+    /// inaudible would look exactly like the app having hung.
+    /// </summary>
+    private void OnPlaybackHotkey()
+    {
+        switch (_state)
+        {
+            case State.Paused:
+                _lastSpoken?.Resume();
+                _state = State.Speaking;
+                break;
+
+            case State.Speaking when _lastSpoken is { IsSpeaking: true } engine:
+                engine.Pause();
+                _state = State.Paused;
+                break;
+
+            case State.Idle when _lastSpoken is { CanReplay: true }:
+                BeginReplay();
+                break;
+
+            // Selecting, Working, a reading still being prepared, and an Idle app with
+            // nothing to replay: there is nothing sensible to do, so do nothing.
+        }
     }
 
     // --- Capture pipeline -------------------------------------------------------
@@ -127,7 +184,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private async void BeginCapture()
     {
         if (_state is State.Selecting or State.Working) return;
-        if (_state == State.Speaking) StopSpeaking();
+        if (_state is State.Speaking or State.Paused) StopSpeaking();
 
         // Stamps this run so a superseded one cannot write state belonging to its
         // replacement. See the _operationId note on the field.
@@ -197,6 +254,7 @@ internal sealed class TrayAppContext : ApplicationContext
         if (ScreenCapture.LooksBlank(crop))
         {
             await InSpeakingStateAsync(
+                _local,
                 () => _local.SpeakStatusAsync("Capture failed.", CancellationToken.None),
                 operationId);
             return;
@@ -220,7 +278,7 @@ internal sealed class TrayAppContext : ApplicationContext
             try
             {
                 await InSpeakingStateAsync(
-                    () => _cloud.ReadAsync(crop, CancellationToken.None), operationId);
+                    _cloud, () => _cloud.ReadAsync(crop, CancellationToken.None), operationId);
                 return;
             }
             catch (RealtimeException ex)
@@ -241,18 +299,60 @@ internal sealed class TrayAppContext : ApplicationContext
         }
 
         await InSpeakingStateAsync(
-            () => _local.ReadAsync(crop, CancellationToken.None), operationId);
+            _local, () => _local.ReadAsync(crop, CancellationToken.None), operationId);
+    }
+
+    /// <summary>
+    /// Plays the last reading again from the beginning (SPEC 2.5). Nothing is returned for
+    /// the clipboard: the text went there when the reading was first produced, and copying
+    /// it a second time would be busywork at best and would clobber whatever the user has
+    /// copied since at worst.
+    /// </summary>
+    private async void BeginReplay()
+    {
+        // Self-guarding rather than relying on the menu item's enablement, which is only
+        // refreshed between readings.
+        if (_state != State.Idle) return;
+        if (_lastSpoken is not { CanReplay: true } engine) return;
+
+        var operationId = ++_operationId;
+
+        try
+        {
+            await InSpeakingStateAsync(
+                engine,
+                async () =>
+                {
+                    await engine.ReplayAsync(CancellationToken.None);
+                    return (string?)null;
+                },
+                operationId);
+        }
+        catch (Exception ex)
+        {
+            // Caught unconditionally, reported conditionally. InSpeakingStateAsync rethrows
+            // RealtimeException so ReadAsync can decide about falling back; there is no
+            // fallback for a replay, and an escaping exception from an async void method
+            // takes the process down - so a superseded replay must still be swallowed here,
+            // just not announced. State is already back to Idle: the same operationId guard
+            // governs InSpeakingStateAsync's finally.
+            if (operationId == _operationId) Report("Replay failed", ex.Message);
+        }
     }
 
     /// <summary>
     /// Runs one reading inside the Speaking state, owning the ESC hook lifecycle
-    /// (SPEC 8.3), the stop-menu enablement and the clipboard copy - all of which are
-    /// identical whichever engine produced the audio.
+    /// (SPEC 8.3), the menu enablement and the clipboard copy - all of which are
+    /// identical whichever engine produced the audio, and whether it is a first reading or a
+    /// replay.
     /// </summary>
-    private async Task InSpeakingStateAsync(Func<Task<string?>> read, int operationId)
+    private async Task InSpeakingStateAsync(
+        IReadingEngine engine, Func<Task<string?>> read, int operationId)
     {
+        _lastSpoken = engine;
         _state = State.Speaking;
         SetStopEnabled(true);
+        SetReplayEnabled(false);
         _escape.Start();
 
         try
@@ -285,6 +385,7 @@ internal sealed class TrayAppContext : ApplicationContext
                 _escape.Stop();
                 _state = State.Idle;
                 SetStopEnabled(false);
+                SetReplayEnabled(engine.CanReplay);
             }
         }
     }
@@ -292,6 +393,14 @@ internal sealed class TrayAppContext : ApplicationContext
     private void Report(string title, string message, ToolTipIcon icon = ToolTipIcon.Error) =>
         _tray.ShowBalloonTip(6000, title, message, icon);
 
+    /// <summary>
+    /// A hard stop: playback ends and its position is forgotten. Deliberately not the same as
+    /// the playback hotkey's pause - ESC has to keep meaning "get me out of this" whatever
+    /// the app is doing (SPEC 1.1, principle 3), and a toggle cannot mean that.
+    ///
+    /// The reading stays replayable, so the playback hotkey means the same thing afterwards
+    /// as it does after a reading that finished on its own.
+    /// </summary>
     private void StopSpeaking()
     {
         // Both engines, not just the active one: a cloud reading that failed over mid-run
@@ -299,16 +408,20 @@ internal sealed class TrayAppContext : ApplicationContext
         _local.Stop();
         _cloud?.Stop();
         _escape.Stop();
-        if (_state == State.Speaking) _state = State.Idle;
+        if (_state is State.Speaking or State.Paused) _state = State.Idle;
         SetStopEnabled(false);
     }
 
-    private void SetStopEnabled(bool enabled)
+    private void SetStopEnabled(bool enabled) => SetMenuEnabled(_stopItem, enabled);
+
+    private void SetReplayEnabled(bool enabled) => SetMenuEnabled(_replayItem, enabled);
+
+    private static void SetMenuEnabled(ToolStripMenuItem item, bool enabled)
     {
-        if (_stopItem.GetCurrentParent() is { InvokeRequired: true } parent)
-            parent.BeginInvoke(() => _stopItem.Enabled = enabled);
+        if (item.GetCurrentParent() is { InvokeRequired: true } parent)
+            parent.BeginInvoke(() => item.Enabled = enabled);
         else
-            _stopItem.Enabled = enabled;
+            item.Enabled = enabled;
     }
 
     // --- Clipboard (SPEC 9) -----------------------------------------------------

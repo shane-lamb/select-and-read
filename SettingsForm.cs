@@ -17,7 +17,7 @@ namespace SelectAndRead;
 internal sealed class SettingsForm : Form
 {
     private readonly HotkeyBox _capture;
-    private readonly HotkeyBox _stop;
+    private readonly HotkeyBox _playback;
     private readonly ComboBox _language = new();
     private readonly ComboBox _voice = new();
     private readonly TrackBar _rate = new();
@@ -76,7 +76,7 @@ internal sealed class SettingsForm : Form
         _pad = Font.Height / 2;
 
         _capture = new HotkeyBox(config.Capture);
-        _stop = new HotkeyBox(config.Stop);
+        _playback = new HotkeyBox(config.Playback);
 
         _grid.ColumnCount = 2;
         _grid.AutoSize = true;
@@ -87,8 +87,11 @@ internal sealed class SettingsForm : Form
         _grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         AddRow("Capture hotkey", _capture);
-        AddRow("Stop hotkey", _stop);
-        AddHint("Hold Ctrl, Shift or Alt and press a key. Function keys conflict least.");
+        AddRow("Pause hotkey", _playback);
+        AddHint(
+            "The pause hotkey resumes a paused reading, and replays the last one from the " +
+            "beginning once it has finished. Hold Ctrl, Shift or Alt and press a key. " +
+            "Function keys conflict least.");
 
         BuildLanguageCombo(config);
         AddRow("OCR language", _language);
@@ -572,7 +575,7 @@ internal sealed class SettingsForm : Form
     private Config Compose() => new()
     {
         CaptureHotkey = _capture.Value.ToString(),
-        StopHotkey = _stop.Value.ToString(),
+        PlaybackHotkey = _playback.Value.ToString(),
         OcrLanguage = _language.SelectedItem as string is { } tag && tag != AutomaticLanguage ? tag : null,
         VoiceId = (_voice.SelectedItem as VoiceItem)?.Id,
         SpeakingRate = _rate.Value / 10.0,
