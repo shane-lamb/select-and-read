@@ -111,13 +111,12 @@ Any of the following returns silently to **Idle** with no audio and no clipboard
 - Right mouse button
 - A selection smaller than 5×5 physical pixels — this makes a stray click harmless
 
-**Losing focus does *not* cancel.** An earlier revision cancelled on deactivation so that
-Alt+Tab would dismiss the overlay. Testing on Windows 11 showed the overlay routinely
-activates and is then immediately deactivated by the foreground lock handing focus back to
-the previous application — cancelling the selection before the user could draw anything.
-Any notification stealing focus would do the same. Losing focus is therefore treated as
-normal; what matters is that the overlay stays escapable, which the ESC hook guarantees
-regardless of focus.
+**Losing focus does *not* cancel.** Cancelling on deactivation is tempting — it would make
+Alt+Tab dismiss the overlay — but on Windows 11 the overlay routinely activates and is then
+immediately deactivated by the foreground lock handing focus straight back to the previous
+application, which would cancel the selection before the user could draw anything. Any
+notification stealing focus does the same. Losing focus is therefore normal; what matters is
+that the overlay stays escapable, which the ESC hook guarantees regardless of focus.
 
 ### 2.4 Pipeline
 
@@ -289,8 +288,8 @@ detail. The measured failure is a desktop icon label, where 4x turns `net10.0` i
 dimensions.** Recognition runs once at native scale; the median height of the reported word
 bounding boxes is then used to decide whether a second, enlarged pass is worthwhile.
 
-An earlier version scaled according to the crop's shorter side, which is simply the wrong
-measurement — a 205x145 capture got 4x whether its glyphs were 8px or 30px. Crop size says
+Scaling by the crop's shorter side is the obvious shortcut and is simply the wrong
+measurement: it gives a 205x145 capture 4x whether its glyphs are 8px or 30px. Crop size says
 nothing about text size.
 
 | Median glyph height | Behaviour |
@@ -339,9 +338,9 @@ pauses and hyphenated words are read as two words. Minimal, high-value normalisa
 ### 6.1 Known limitation — multi-column text
 
 Lines are read in the engine's own order. **Measured on Windows 11:** the engine groups by
-column, emitting the entire left column and then the entire right — it does *not* interleave
-line by line, as this spec originally predicted. The result is still wrong for reading
-aloud when a passage spans columns, but far less garbled than assumed.
+column, emitting the entire left column and then the entire right, rather than interleaving
+line by line. The result is still wrong for reading aloud when a passage spans columns, but
+far less garbled than interleaving would be.
 
 Detecting columns reliably is a substantially harder problem than the rest of this
 application combined. v1 documents the limitation and advises selecting one column at a
@@ -501,13 +500,13 @@ populated from installed voices, a rate slider with a *Test* button, a language 
 from `AvailableRecognizerLanguages`, and checkboxes.
 
 **The dialog must size itself from its content**, using `AutoScaleMode.Font`, auto-sizing
-layout panels and font-relative metrics — never hardcoded pixel bounds. An earlier revision
-positioned every control with absolute `SetBounds` calls; it rendered correctly at the
-default font and broke completely once the user raised the system text size, clipping every
-label to a single character and pushing the buttons off the bottom edge. This is the
-opposite of the overlay's rule in §4.1, which pins raw physical pixels on purpose because
-its coordinates index the freeze frame. Accessibility settings are exactly the conditions a
-read-aloud tool should expect to run under.
+layout panels and font-relative metrics — never hardcoded pixel bounds. Positioning controls
+with absolute `SetBounds` calls renders correctly at the default font and breaks completely
+once the user raises the system text size: every label clips to a single character and the
+buttons are pushed off the bottom edge. This is the opposite of the overlay's rule in §4.1,
+which pins raw physical pixels on purpose because its coordinates index the freeze frame.
+Accessibility settings are exactly the conditions a read-aloud tool should expect to run
+under.
 
 *Start with Windows* writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` — no
 elevation required, and per-user, which is correct for a tray utility.
@@ -517,12 +516,12 @@ elevation required, and per-user, which is correct for a tray utility.
 ### 10.1 Sizing — content-derived, desktop-bounded
 
 The dialog sizes itself from its content and the system font, never from hardcoded pixels.
-It does **not** use `Form.AutoSize`, which is content-driven but unbounded: once the cloud
-rows of §14 were added it sized the form past the bottom of the screen, and Save and Cancel
-went with it — unreachable, with nothing to scroll. `OnLoad` computes the size from
-`_grid.PreferredSize` and clamps it to the working area; overflow scrolls.
+It does **not** use `Form.AutoSize`, which is content-driven but unbounded: at this row count
+it sizes the form past the bottom of the screen and takes Save and Cancel with it —
+unreachable, with nothing to scroll. `OnLoad` computes the size from `_grid.PreferredSize`
+and clamps it to the working area; overflow scrolls.
 
-Three rules follow, each of which was a defect first:
+Three rules follow, each of which produces an inoperable dialog when broken:
 
 - Save and Cancel live **outside** the scrolling region. Anything that must always be
   clickable cannot be a row that can scroll away.
@@ -747,10 +746,10 @@ and none of those should change without the user asking. The local pipeline rema
 default and the fallback.
 
 **Chosen model: `gpt-realtime-2.1-mini`.** It is the cheapest model that accepts image
-input *and* emits streaming audio. Anthropic was evaluated and cannot serve this at all:
-every Claude model is text+image in, **text out**, with no audio output anywhere on the
-Messages API. `gpt-audio` was rejected for the mirror-image reason — audio out, but text
-and audio in only, so it cannot take the crop.
+input *and* emits streaming audio. Anthropic cannot serve this at all: every Claude model is
+text+image in, **text out**, with no audio output anywhere on the Messages API. `gpt-audio`
+fails for the mirror-image reason — audio out, but text and audio in only, so it cannot take
+the crop.
 
 Estimated cost is roughly **$0.017 per reading** (~500 image tokens, ~250 text in, ~800
 audio out at $0.80/$0.60/$20.00 per MTok). This is an estimate, not a measurement: the
@@ -841,7 +840,7 @@ saved-password stores offer, and the right level for a tray utility.
 |---|---|
 | Does cross-compilation from macOS work for this TFM? | **Resolved: yes,** and further than a compile — .NET 10 SDK with `EnableWindowsTargeting` gives a clean build *and* a working self-contained single-file publish for a Windows RID. `tests/vm/deploy.sh` relies on it, and so does the release workflow (§12.3). |
 | Does upscaling actually improve accuracy? | **Resolved: yes,** decisively, on realistic input (§5.2). It made no clear difference on synthetic fixtures, which is why the real-capture fixture exists. |
-| How does the engine order multi-column text? | **Resolved:** by column, not interleaved line by line as originally predicted (§6.1). |
+| How does the engine order multi-column text? | **Resolved:** by column, not interleaved line by line (§6.1). |
 | Does time-to-first-word need chunked synthesis? | **Open.** Not yet measured end to end. §7.4 ships the simple path behind an interface so chunking drops in later without redesign. |
 | Is the coordinate handling correct on a scaled display? | **Open, and the biggest remaining risk.** Proven pixel-exact at 100%; untested at 125%/150%/200%. See §13.4. |
 | Can a vision-language model replace OCR *and* synthesis in one call? | **Resolved: yes, on OpenAI only.** `gpt-realtime-2.1-mini` takes an image and streams audio back (§14.1). No Anthropic model can — every Claude model is text out only. |

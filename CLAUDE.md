@@ -96,20 +96,19 @@ not let WinForms autoscaling touch the overlay (`AutoScaleMode.None`, positioned
 
 **That rule is scoped to the overlay — ordinary dialogs must do the opposite.**
 `SettingsForm` uses `AutoScaleMode.Font`, auto-sizing layout panels and font-relative
-metrics (`Font.Height * n`), never hardcoded pixel bounds. It previously used absolute
-`SetBounds` calls, which looked correct at the default font and became unusable as soon as
-the user raised the system text size: labels clipped to one character, rows overlapping,
-buttons pushed off the client area. Anything with user-visible text needs to size itself
-from its content.
+metrics (`Font.Height * n`), never hardcoded pixel bounds. Absolute `SetBounds` calls look
+correct at the default font and become unusable as soon as the user raises the system text
+size: labels clipped to one character, rows overlapping, buttons pushed off the client area.
+Anything with user-visible text needs to size itself from its content.
 
-**But content-sized is not the same as unbounded, and `SettingsForm` now has three layout
-invariants that each produced a dialog you could not operate.** All are verifiable with
+**But content-sized is not the same as unbounded, and `SettingsForm` has three layout
+invariants that each guard against a dialog you cannot operate.** All are verifiable with
 `--settings-metrics`; run it after touching that file.
 
-- **`Form.AutoSize` has no upper bound.** It sized the dialog straight past the bottom of
-  the screen once the cloud rows were added, taking Save and Cancel with it. The size is
-  now computed in `OnLoad` from `_grid.PreferredSize` — still entirely content- and
-  font-derived — and clamped to the working area.
+- **`Form.AutoSize` has no upper bound.** At this row count it sizes the dialog straight past
+  the bottom of the screen, taking Save and Cancel with it. The size is instead computed in
+  `OnLoad` from `_grid.PreferredSize` — still entirely content- and font-derived — and
+  clamped to the working area.
 - **A `Fill`-docked child of an `AutoScroll` panel can never scroll.** Docking resizes the
   child to the viewport, so it is never taller than the visible area, no scrollbar appears,
   and the overflow is silently clipped. `_grid` is deliberately left undocked.
@@ -118,8 +117,8 @@ invariants that each produced a dialog you could not operate.** All are verifiab
   smaller than its contents.
 
 **Anything that must always be clickable belongs outside the scrolling region.** Save and
-Cancel used to be the last row of `_grid`; when the dialog clamped, they were the rows that
-fell off the bottom. They now live in a fixed row of the root layout.
+Cancel live in a fixed row of the root layout, not in `_grid` — as grid rows they are the
+first thing to fall off the bottom when the dialog clamps.
 
 **Per-Monitor-V2 DPI awareness is not multi-monitor code** (SPEC §4). It stays even though
 the app is single-monitor: without a DPI-aware manifest Windows virtualises the process and
@@ -189,8 +188,8 @@ disposed engine throws from the `CancellationTokenSource` before it reaches any 
 Enlarging helps small text and *harms* text the engine already reads cleanly — at 4x a
 desktop icon label's `net10.0` becomes `netl 0.0`. So recognition runs once at native scale,
 takes the median word bounding-box height, and only re-runs enlarged when that is under
-25px. An earlier version scaled by the crop's shorter side, which measures the wrong thing
-entirely. `tests/fixtures/icon-label.png` and `windows-ui-text.png` bracket the crossover
+25px. Scaling by the crop's shorter side measures the wrong thing entirely.
+`tests/fixtures/icon-label.png` and `windows-ui-text.png` bracket the crossover
 (27px must not be upscaled; 20px must be) — keep both passing.
 
 **The cloud engine is opt-in, and local is the fallback** (SPEC §14.1). Enabling it changes

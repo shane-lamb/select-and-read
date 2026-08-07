@@ -201,11 +201,11 @@ internal sealed class SelectionOverlay : Form
 
     // Deliberately no OnDeactivate handler.
     //
-    // An earlier revision cancelled the selection when the overlay lost activation, on the
-    // theory that Alt+Tab should dismiss it. Testing on Windows 11 showed that the overlay
-    // routinely activates and is then immediately deactivated by the foreground lock
-    // handing focus back to the previous app - so the selection cancelled itself before
-    // the user could draw anything. Any notification stealing focus would do the same.
+    // Cancelling the selection on lost activation looks reasonable - Alt+Tab ought to
+    // dismiss the overlay - but on Windows 11 the overlay routinely activates and is then
+    // immediately deactivated by the foreground lock handing focus back to the previous
+    // app, so the selection would cancel itself before the user could draw anything. Any
+    // notification stealing focus does the same.
     //
     // Losing focus is therefore treated as normal. What matters is that the overlay always
     // remains escapable, which the low-level ESC hook guarantees regardless of focus.

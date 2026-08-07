@@ -131,11 +131,11 @@ internal sealed class OcrService
     /// when the text really is small.
     ///
     /// The factor is derived from the median glyph height reported by the native-scale
-    /// pass, never from the crop's own dimensions. An earlier version used the crop size
-    /// as a proxy for text size, which is simply the wrong measurement: a 205x145 capture
-    /// of a desktop icon label got a 4x upscale even though its glyphs were already ~30px,
-    /// and the enlargement smeared the "1" in "net10.0" into an "l". Crop dimensions say
-    /// nothing about how big the text inside them is.
+    /// pass, never from the crop's own dimensions. Crop size is the tempting proxy and is
+    /// simply the wrong measurement: it hands a 205x145 capture of a desktop icon label a 4x
+    /// upscale even though its glyphs are already ~30px, and that enlargement smears the "1"
+    /// in "net10.0" into an "l". Crop dimensions say nothing about how big the text inside
+    /// them is.
     /// </summary>
     internal static int ChooseScale(OcrResult native, int width, int height)
     {

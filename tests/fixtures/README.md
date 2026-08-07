@@ -4,9 +4,9 @@ Images for exercising the OCR pipeline headlessly on Windows, without the intera
 capture loop (SPEC 13.2).
 
 **Every expected file below records output actually measured on Windows 11 ARM64
-(build 26200)** — they are no longer predictions. Where the engine gets something wrong,
-the expected file records the wrong answer, so that a change in behaviour shows up as a
-diff rather than hiding.
+(build 26200)**, not desired output. Where the engine gets something wrong, the expected
+file records the wrong answer, so that a change in behaviour shows up as a diff rather than
+hiding.
 
 Run one:
 
@@ -61,11 +61,11 @@ above it a clear loss. A change that regresses either fixture has broken the heu
 run both after touching `OcrService.ChooseScale`.
 
 Note the win only shows up on realistic input — on the synthetic 11pt fixtures the
-comparison is muddy, which is why both real captures were added.
+comparison is muddy, which is what the two real captures are here for.
 
-## Multi-column behaviour is better than the spec first assumed
+## Multi-column behaviour
 
-The original spec predicted that a two-column layout would interleave line by line. It does
-not — Windows OCR groups by column, emitting the whole left column and then the whole
-right. Still wrong for reading aloud in the general case (a sentence spanning columns is
-reordered), but far less garbled than predicted. SPEC 6.1 has been corrected to match.
+A two-column layout does not interleave line by line. Windows OCR groups by column, emitting
+the whole left column and then the whole right. Still wrong for reading aloud in the general
+case (a sentence spanning columns is reordered), but far less garbled than interleaving
+would be. SPEC 6.1 records the same finding.

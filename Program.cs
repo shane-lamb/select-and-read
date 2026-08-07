@@ -268,8 +268,8 @@ internal static class Program
 
         // Fitting entirely is nice but not required; a clamped dialog that scrolls its
         // content is a pass. The two real failures are Save being off screen, and content
-        // overflowing with no scrollbar to reach it - which is exactly the state the
-        // buttons-inside-the-grid layout used to produce.
+        // overflowing with no scrollbar to reach it - both of which leave the dialog
+        // impossible to operate.
         if (!reachable) return 1;
         return clipped && !scrollable ? 1 : 0;
     }

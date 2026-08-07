@@ -4,10 +4,10 @@ namespace SelectAndRead;
 /// Settings dialog (SPEC 10). Built in code; no designer file.
 ///
 /// Every dimension here is derived from the current font rather than hardcoded in pixels,
-/// and the form auto-sizes to its content. An earlier revision positioned controls with
-/// absolute SetBounds calls: it looked fine at the default font and became unusable the
-/// moment the user raised the system text size - labels clipped to a single character,
-/// rows overlapping, and the buttons cut off below the client area.
+/// and the form auto-sizes to its content. Absolute SetBounds calls look fine at the default
+/// font and make the dialog unusable the moment the user raises the system text size -
+/// labels clipped to a single character, rows overlapping, and the buttons cut off below the
+/// client area.
 ///
 /// Note this is the opposite choice to SelectionOverlay, which pins AutoScaleMode to None
 /// on purpose. That form must stay in raw physical pixels because its coordinates index
@@ -67,8 +67,8 @@ internal sealed class SettingsForm : Form
 
         // Scale with the system font. The size still comes from the content, but it is
         // computed in OnLoad and clamped to the desktop rather than left to Form.AutoSize:
-        // AutoSize has no upper bound, so it grew the dialog straight past the bottom of
-        // the screen once the cloud rows were added.
+        // AutoSize has no upper bound, so at this row count it grows the dialog straight
+        // past the bottom of the screen.
         AutoScaleMode = AutoScaleMode.Font;
 
         // Font-relative metrics: these track the user's text size instead of fighting it.
@@ -114,11 +114,11 @@ internal sealed class SettingsForm : Form
     /// <summary>
     /// Scrolling rows, fixed buttons.
     ///
-    /// The buttons deliberately live outside the scrolling region. They used to be the last
-    /// row of the grid, which worked only while the whole dialog fitted on screen: once the
-    /// content grew past the desktop the form clamped, and Save and Cancel were the rows
-    /// that fell off the bottom - unreachable, with no way to scroll to them. Anything that
-    /// must always be clickable belongs in the fixed row, not the scrolling one.
+    /// The buttons deliberately live outside the scrolling region. As the last row of the
+    /// grid they work only while the whole dialog fits on screen: once the content grows past
+    /// the desktop the form clamps, and Save and Cancel are the rows that fall off the bottom
+    /// - unreachable, with no way to scroll to them. Anything that must always be clickable
+    /// belongs in the fixed row, not the scrolling one.
     /// </summary>
     private Control BuildRoot()
     {
