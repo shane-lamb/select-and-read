@@ -449,10 +449,37 @@ internal sealed class TrayAppContext : ApplicationContext
 
     // --- Settings ---------------------------------------------------------------
 
+    /// <summary>
+    /// The dialog while it is open, so a second request surfaces it instead of stacking
+    /// another copy on top.
+    /// </summary>
+    private SettingsForm? _settings;
+
     internal void ShowSettings()
     {
+        if (_settings is not null)
+        {
+            // Best effort, as in SelectionOverlay: the foreground lock refuses this when the
+            // request came from a second launch, which leaves the taskbar button flashing.
+            Native.SetForegroundWindow(_settings.Handle);
+            _settings.Activate();
+            return;
+        }
+
         using var form = new SettingsForm(_config);
-        if (form.ShowDialog() != DialogResult.OK) return;
+        _settings = form;
+
+        DialogResult result;
+        try
+        {
+            result = form.ShowDialog();
+        }
+        finally
+        {
+            _settings = null;
+        }
+
+        if (result != DialogResult.OK) return;
 
         _config = form.Result;
         _config.Save();
