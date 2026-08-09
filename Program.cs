@@ -19,6 +19,10 @@ internal static class Program
             return 0;
         }
 
+        // Only in the instance that is actually staying, and only after the mutex check,
+        // so a second launch cannot rewrite the entry out from under the running one.
+        Config.RepairStartWithWindowsPath();
+
         // Per-Monitor-V2 was already established by app.manifest before any managed code
         // ran, so ApplicationConfiguration.Initialize() is deliberately not called here -
         // it would emit a contradicting SetHighDpiMode call. See the csproj note.

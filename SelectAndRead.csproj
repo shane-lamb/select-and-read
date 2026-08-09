@@ -28,6 +28,12 @@
          tray menu shows verbatim. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Mirrors the tray icon TrayAppContext.CreateTrayIcon draws at runtime. The tray
+         icon is still drawn in code rather than loaded from here, because it is built at
+         one fixed size for one purpose; this file is what Explorer, the Start menu
+         shortcut and the Add/Remove Programs entry show, and without it all three fall
+         back to the generic default. Both are the same mark, so keep them in step. -->
+    <ApplicationIcon>icon.ico</ApplicationIcon>
     <!-- WFO0003 asks us to declare DPI awareness via ApplicationHighDpiMode instead of
          the manifest. We deliberately do the opposite: the manifest is applied by the
          loader before any managed code runs, whereas Application.SetHighDpiMode only

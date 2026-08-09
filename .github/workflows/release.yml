@@ -47,13 +47,15 @@ jobs:
 
   release:
     needs: check
+    # Nothing below runs unless the version is new.
     if: needs.check.outputs.release == 'true'
-    # Linux, not Windows: a self-contained publish for a Windows RID is host-agnostic
+    # Windows, because ISCC is a Windows binary. Publishing itself is still host-agnostic
     # (EnableWindowsTargeting in the csproj), which is how tests/vm/deploy.sh produces the
-    # exe it ships to the VM from a Mac. Only *running* the result needs Windows.
-    runs-on: ubuntu-latest
+    # exe it ships to the VM from a Mac - the runner is Windows for the installer's sake,
+    # not the build's.
+    runs-on: windows-latest
     env:
-      ASSET: SelectAndRead-v${{ needs.check.outputs.version }}-win-x64.exe
+      ASSET: installer/Output/SelectAndRead-v${{ needs.check.outputs.version }}-setup.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -74,15 +76,26 @@ jobs:
           dotnet publish SelectAndRead.csproj -c Release -r win-x64
           --self-contained -p:PublishSingleFile=true -o publish
 
-      - name: Name the asset after the version
-        run: mv publish/SelectAndRead.exe "$ASSET"
+      # ISCC names its own output from OutputBaseFilename, so there is nothing to rename.
+      # Inno Setup ships on the runner image; the fallback is there so a change to that
+      # image fails loudly on the install rather than silently on a missing ISCC.exe.
+      - name: Build the installer
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup is not on the runner image; installing it."
+            choco install innosetup -y --no-progress
+          }
+          & $iscc /DAppVersion=$env:VERSION installer\SelectAndRead.iss
 
       # gh creates the tag itself from --target, so there is no separate tagging step.
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
-          gh release create "v${{ needs.check.outputs.version }}" "$ASSET"
+          gh release create "v${{ needs.check.outputs.version }}" "$env:ASSET"
           --title "v${{ needs.check.outputs.version }}"
           --generate-notes
-          --target "$GITHUB_SHA"
+          --target "$env:GITHUB_SHA"

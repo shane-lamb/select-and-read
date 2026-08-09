@@ -36,6 +36,10 @@ pushing to `main` — `.github/workflows/release.yml` does the rest (SPEC §12.3
 property is the only place the version is written; nothing else needs updating, and
 `app.manifest`'s version is a different thing that stays where it is.
 
+The release asset is the Inno Setup installer built from `installer/SelectAndRead.iss`, not
+the bare exe, which is why that job runs on `windows-latest` — ISCC is a Windows binary and
+nothing else about the build needs Windows.
+
 ## Development happens on a Mac; the app only runs on Windows
 
 Builds work on macOS via `EnableWindowsTargeting` in the csproj, so compile errors are
@@ -212,6 +216,18 @@ surfaces it via its own `ApiKey` property rather than through `Config`.
 tens of megabytes at 4K, so it is scoped to an inner block that ends the moment the crop
 exists. A method-scoped `using` there compiles and works, and silently pins a full screenshot
 in memory for the duration of every reading.
+
+**The installer is per-user for a correctness reason, not a convenience one** (SPEC §12.4).
+Everything the app owns is per-user — `asInvoker` manifest, `%APPDATA%` config, DPAPI
+`CurrentUser` API key, `HKCU` Run entry — so `PrivilegesRequired=lowest` in
+`installer/SelectAndRead.iss` is what keeps the post-install `[Run]` entry a plain launch.
+Move the install to Program Files and it elevates, the launched app inherits the admin
+token, and it writes the API key and autostart entry into the wrong profile; recovering
+needs `runasoriginaluser` on the `[Run]` line. Two other lines in that file are equally
+load-bearing: `AppId` is a fixed GUID and must never change, or a new version installs
+*beside* the old one instead of over it; and the `[Code]` `taskkill` is not laziness in
+place of Restart Manager — RM closes apps by posting `WM_CLOSE` to top-level windows, and a
+tray app has none, so it cannot close the app and demands a reboot instead.
 
 **Never enable trimming** on publish — it breaks WinForms reflection over designer types.
 

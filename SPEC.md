@@ -583,11 +583,10 @@ dotnet publish -c Release -r win-x64   --self-contained -p:PublishSingleFile=tru
 dotnet publish -c Release -r win-arm64 --self-contained -p:PublishSingleFile=true
 ```
 
-Self-contained is the right trade: the user downloads one file and runs it, with no .NET
-runtime install. **The ARM64 single-file build measures ~147 MB** — considerably larger
-than a WinForms-only estimate suggests, because the WinRT projection assemblies come along
-too. **Do not enable trimming** — it breaks WinForms' reflection
-over designer-generated types.
+Self-contained is the right trade: no .NET runtime install on the target. **The ARM64
+single-file build measures ~147 MB** — considerably larger than a WinForms-only estimate
+suggests, because the WinRT projection assemblies come along too. **Do not enable
+trimming** — it breaks WinForms' reflection over designer-generated types.
 
 Unsigned binaries trigger a SmartScreen warning on first run. Documented in the README;
 code signing is out of scope for v1.
@@ -628,16 +627,66 @@ Releases are cut by `.github/workflows/release.yml`:
 1. A push to `main` reads `<Version>` back out of the csproj on a Linux runner.
 2. If a tag `v<n>` already exists, the run stops there — green, seconds long, no build.
    Ordinary pushes to `main` therefore cost nothing.
-3. Otherwise it runs both test projects, publishes the §12.1 `win-x64` single-file build,
-   and attaches it to a new release tagged `v<n>` as `SelectAndRead-v<n>-win-x64.exe`.
+3. Otherwise it runs both test projects on a Windows runner, publishes the §12.1 `win-x64`
+   single-file build, wraps it in the §12.4 installer, and attaches that to a new release
+   tagged `v<n>` as `SelectAndRead-v<n>-setup.exe`.
 
 So the entire release process is: bump the integer, push to `main`.
+
+The build job runs on `windows-latest` **only because ISCC is a Windows binary**. Publishing
+itself remains host-agnostic (§13.2), which is what `tests/vm/deploy.sh` relies on to build
+the exe on a Mac. WiX would not have avoided this: its v4+ rewrite moved the toolset onto
+.NET, but MSI creation still needs Windows Installer components that do not exist on Linux,
+and the containers that claim otherwise run the WiX CLI under Wine.
 
 The version is surfaced in the tray menu as a disabled item above *Exit*, read from
 `AssemblyInformationalVersionAttribute` at runtime, so a user can name their build without
 finding the exe. This is also why the csproj sets
 `IncludeSourceRevisionInInformationalVersion` to `false` — the SDK otherwise appends
 `+<commit-sha>`, which would be shown verbatim.
+
+### 12.4 The installer
+
+The published artifact is `installer/SelectAndRead.iss`, an Inno Setup script wrapping the
+`win-x64` publish. It installs to `%LOCALAPPDATA%\Programs\SelectAndRead`, registers a
+Start menu shortcut, and launches the app when it finishes.
+
+**The install is per-user, and that is a correctness decision rather than a convenience
+one.** Everything the app owns is already per-user: the `asInvoker` manifest, `%APPDATA%`
+config, the DPAPI `CurrentUser` API key (§14.5) and the `HKCU` Run entry (§10). A Program
+Files install would need elevation none of that benefits from, and the elevation is not
+merely redundant — an elevated installer hands the launched app an admin token, and the app
+then writes its API key and autostart entry into the administrator's profile instead of the
+user's. `PrivilegesRequired=lowest` is what lets the post-install launch be a plain `[Run]`
+entry rather than needing `runasoriginaluser`, and what puts the uninstaller in the user's
+own hive so it can clean up the Run value it is responsible for.
+
+Three further things the script has to get right, each of which fails quietly otherwise:
+
+- **`AppId` is a fixed GUID.** It is what makes an install replace its predecessor instead
+  of sitting beside it. Changing it produces two copies and two Add/Remove Programs entries.
+- **The running app is killed with `taskkill`, not Restart Manager.** RM closes applications
+  by posting `WM_CLOSE` to top-level windows; a tray app has none, so RM cannot close it and
+  falls back to demanding a reboot. `CloseApplications=no` turns RM off and the `[Code]`
+  section does it directly — which it must, since a running exe cannot be overwritten.
+- **`ArchitecturesInstallIn64BitMode` is deliberately unset.** It steers `{autopf}` and the
+  registry view, and this install touches neither. `ArchitecturesAllowed=x64compatible`
+  still admits ARM64 Windows, which runs the x64 payload under emulation.
+
+Settings are untouched by install, upgrade and uninstall alike, because they live in
+`%APPDATA%\SelectAndRead` rather than beside the exe.
+
+Upgrading from a pre-installer copy leaves the user's old downloaded exe where it was —
+setup has no way to find it — so the README asks them to delete it. The stale absolute path
+such a copy may have written into the Run key is repaired by the app itself:
+`Config.RepairStartWithWindowsPath`, called once at startup, repoints an *existing* entry at
+the running exe. It never creates one, because an absent entry is the user's decision not to
+autostart.
+
+`icon.ico` exists for the installer's sake: it is what Explorer, the Start menu shortcut and
+the Add/Remove Programs entry display. The tray icon is still drawn in code
+(`TrayAppContext.CreateTrayIcon`) since it is built at one fixed size for one purpose, but
+the two are the same mark and should stay in step.
 
 ---
 
@@ -673,8 +722,9 @@ Apple Silicon can only virtualise Windows 11 ARM64.
    is **not** limited to compile-checking: the full `--self-contained
    -p:PublishSingleFile=true` publish for a Windows RID works too, which is exactly what
    `tests/vm/deploy.sh` does on every deploy — the exe it hands to the VM was built on the
-   Mac. **The only thing that requires Windows is running the result**, which is why §12.3
-   can build releases on a Linux runner.
+   Mac. **The only thing that requires Windows is running the result** — and, since §12.4,
+   packaging it, because ISCC is a Windows binary. That is the sole reason the release job
+   is on a Windows runner; the publish inside it would be just as happy on Linux.
 2. **`TextCleaner` unit tests run anywhere.** `tests/TextCleaner.Tests` targets plain
    `net10.0` and compiles `TextCleaner.cs` in directly (linked, not referenced), so the
    normalisation rules in §6 are genuinely executed and asserted during development

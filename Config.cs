@@ -138,4 +138,28 @@ internal sealed class Config
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
         return key?.GetValue(RunValueName) is not null;
     }
+
+    /// <summary>
+    /// Points an existing Run entry back at the running exe if it has moved.
+    ///
+    /// ApplyStartWithWindows records an absolute path, so installing over a copy the user
+    /// had been running from their downloads folder strands the entry on a path that no
+    /// longer exists - and it otherwise only corrects itself the next time they open
+    /// Settings and press Save, which they have no reason to do.
+    ///
+    /// A missing entry is left missing. Absence is the user's decision not to autostart,
+    /// and this must never be the thing that turns it on.
+    /// </summary>
+    internal static void RepairStartWithWindowsPath()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+        if (key?.GetValue(RunValueName) is not string existing) return;
+
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exe)) return;
+
+        var current = $"\"{exe}\"";
+        if (!string.Equals(existing, current, StringComparison.OrdinalIgnoreCase))
+            key.SetValue(RunValueName, current);
+    }
 }

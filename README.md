@@ -19,9 +19,15 @@ for the full design and the reasoning behind it.
 
 ## Download
 
-Grab `SelectAndRead-v<n>-win-x64.exe` from the
-[latest release](https://github.com/shane-lamb/select-and-read/releases/latest). It is
-self-contained — no .NET runtime install, no setup, just run it and look for the tray icon.
+Grab `SelectAndRead-v<n>-setup.exe` from the
+[latest release](https://github.com/shane-lamb/select-and-read/releases/latest) and run it.
+It installs to `%LOCALAPPDATA%\Programs\SelectAndRead`, adds a Start menu entry, and starts
+the app — look for the tray icon.
+
+The app is self-contained, so there is no .NET runtime to install either. Running the
+installer again upgrades in place, and *Add or remove programs* uninstalls it. Your settings
+live in `%APPDATA%\SelectAndRead` and survive both.
+
 
 Unsigned binaries trigger a SmartScreen warning on first run: *More info → Run anyway*.
 
@@ -55,10 +61,11 @@ process:
 ```
 
 Commit that to `main` and [the release workflow](.github/workflows/release.yml) runs the
-tests, publishes a self-contained `win-x64` exe and attaches it to a new
-`v2` release. A push to `main` that does not change the version is skipped, so there is no
-risk in pushing ordinary commits. The running version is shown at the bottom of the tray
-menu.
+tests, publishes a self-contained `win-x64` exe, wraps it in the
+[Inno Setup installer](installer/SelectAndRead.iss) and attaches
+`SelectAndRead-v2-setup.exe` to a new `v2` release. A push to `main` that does not change
+the version is skipped, so there is no risk in pushing ordinary commits. The running version
+is shown at the bottom of the tray menu.
 
 ## Deploying to the test VM
 

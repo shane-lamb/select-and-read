@@ -5,3 +5,7 @@ obj/
 .idea/
 .DS_Store
 TestResults/
+# Where the release workflow publishes the exe, and what installer/SelectAndRead.iss
+# expects to find it in.
+publish/
+installer/Output/
