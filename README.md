@@ -7,9 +7,13 @@ no per-use cost, no network, and nothing from your screen ever leaves the machin
 
 | | |
 |---|---|
-| **Read a selection** | `Ctrl+Shift+F9` |
-| **Stop reading** | `Ctrl+Shift+F10`, or `Esc` |
+| **Read a selection** | `Alt+Space` |
+| **Pause or resume** | `Alt+V` |
+| **Replay the last reading** | `Alt+V`, once it has finished |
+| **Stop reading** | `Esc` |
 | **Cancel a selection** | `Esc`, or right-click |
+
+Hotkeys are configurable in Settings.
 
 Recognised text is also copied to the clipboard.
 
@@ -95,7 +99,7 @@ utility, and on a stock Windows 11 taskbar a new tray icon goes into the overflo
 `^` chevron rather than being shown. The single-file exe also takes a few seconds to unpack
 before the process even exists, so an immediate `tasklist` finds nothing. The script waits
 for the process and prints its PID and session, which is the thing to trust; press
-`Ctrl+Shift+F9` in the guest to confirm it is actually listening.
+`Alt+Space` in the guest to confirm it is actually listening.
 
 The script expects a running VM named `Windows 11` (override with `VM=...`) with Parallels'
 default folder sharing on; staging goes through `~/Downloads` because that is one of the

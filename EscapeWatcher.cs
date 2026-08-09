@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace SelectAndRead;
 
 /// <summary>
-/// Watches for ESC while speech is playing (SPEC 8.3).
+/// Watches for ESC while speech is playing (SPEC 8.2).
 ///
 /// Two properties are deliberate and important. The hook is installed only for the
 /// duration of playback, not for the life of the process; and it always calls

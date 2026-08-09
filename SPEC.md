@@ -77,7 +77,7 @@ surfaces the settings window of the running instance rather than starting a new 
 
 ### 2.2 Capture flow
 
-Pressing the **capture hotkey** (default `Ctrl+Shift+F9`):
+Pressing the **capture hotkey** (default `Alt+Space`):
 
 1. **Freeze frame.** The primary monitor is captured to a bitmap *before anything is drawn
    on screen*.
@@ -129,7 +129,7 @@ paragraph-sized selection on typical hardware.
 
 ### 2.5 Pausing, resuming, replaying and stopping
 
-One **playback hotkey** (default `Ctrl+Shift+F10`) means whichever of pause, resume and
+One **playback hotkey** (default `Alt+V`) means whichever of pause, resume and
 replay fits the current state:
 
 | State when pressed | Effect |
@@ -428,19 +428,11 @@ translated into events.
 
 Registration failure raises a tray balloon naming the specific hotkey (see §2.6).
 
-### 8.2 Defaults
+A registered hotkey takes precedence over the foreground application's own handling of that
+chord, so whatever is bound here stops reaching other programs while the app runs. Defaults
+are listed with the rest of the settings in §10.
 
-| Action | Default |
-|---|---|
-| Capture | `Ctrl+Shift+F9` |
-| Pause / resume / replay | `Ctrl+Shift+F10` |
-
-Function keys are chosen deliberately. `Ctrl+Alt+<letter>` collides with AltGr on
-international keyboard layouts, where AltGr generates Ctrl+Alt — such a hotkey would break
-text entry for those users. `Ctrl+Shift+<letter>` combinations globally steal shortcuts
-that applications commonly use. Both defaults are user-configurable.
-
-### 8.3 ESC while speaking
+### 8.2 ESC while speaking
 
 A `WH_KEYBOARD_LL` low-level keyboard hook, installed **only** for the duration of
 playback and removed as soon as speech stops.
@@ -459,7 +451,7 @@ happened to be reading.
 
 The hook requires a message pump on its thread, which the UI thread provides.
 
-### 8.4 ESC while selecting
+### 8.3 ESC while selecting
 
 No hook is needed. The overlay window has focus and handles the key directly.
 
@@ -486,8 +478,8 @@ missing or unparseable file falls back to defaults rather than failing to start.
 
 | Setting | Default |
 |---|---|
-| Capture hotkey | `Ctrl+Shift+F9` |
-| Pause hotkey (pause, resume, replay — §2.5) | `Ctrl+Shift+F10` |
+| Capture hotkey | `Alt+Space` |
+| Pause hotkey (pause, resume, replay — §2.5) | `Alt+V` |
 | OCR language | user profile default |
 | Voice id | best available (see §7.2) |
 | Speaking rate | 1.0 |
@@ -545,7 +537,7 @@ Per-Monitor-V2 DPI awareness and long-path awareness.
 |---|---|
 | `Program.cs` | Mutex, DPI init, bootstrap, debug CLI modes (§12.2) |
 | `TrayAppContext.cs` | `ApplicationContext`: tray icon, menu, state machine |
-| `Hotkey.cs` | Parses and formats "Ctrl+Shift+F9" ⇄ Win32 modifier flags + virtual key |
+| `Hotkey.cs` | Parses and formats "Alt+Space" ⇄ Win32 modifier flags + virtual key |
 | `HotkeyManager.cs` | `RegisterHotKey` on a message-only window; `WM_HOTKEY` → events |
 | `ScreenCapture.cs` | Virtual-screen bounds, freeze frame, crop |
 | `SelectionOverlay.cs` | The overlay form — largest and most detail-sensitive file |
@@ -760,6 +752,11 @@ manual checklist:
   would show up, and is easy to test: set the VM's scaling and re-run the drag.
 - Global hotkey registration and conflict reporting (needs an interactive logon session
   driving real keystrokes).
+- **Whether the settings dialog's hotkey box can capture the default chords.** `Alt+Space` and
+  `Alt+<letter>` arrive as `WM_SYSKEYDOWN` and would otherwise open the window menu or match
+  a control mnemonic; `HotkeyBox` claims them via `IsInputKey` and `Handled`, which should
+  pre-empt both, but the interaction has not been exercised. If either escapes, the default
+  is still registrable — the user just could not rebind *to* it from the dialog.
 - The tray icon and menu.
 - The settings dialog's *appearance*. Its geometry is now checked by `--settings-metrics`
   (§10.1) at both 1024×768 and 3840×1926, but nothing confirms it looks right, and it has

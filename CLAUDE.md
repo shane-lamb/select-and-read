@@ -155,7 +155,7 @@ routinely activates it and then hands focus straight back, which cancelled selec
 the user could draw. It stays escapable via a low-level ESC hook instead — which is also the
 only way an unfocused overlay can be dismissed at all.
 
-**The ESC hook must always call `CallNextHookEx`** (SPEC §8.3). It observes ESC without
+**The ESC hook must always call `CallNextHookEx`** (SPEC §8.2). It observes ESC without
 consuming it, so the foreground app still receives its own key, and it is installed only for
 the duration of playback or the overlay — never process-wide. "Playback" includes Paused: a
 paused reading is the state a user is most likely to sit in, so it is the worst one to have

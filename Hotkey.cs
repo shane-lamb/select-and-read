@@ -4,16 +4,14 @@ namespace SelectAndRead;
 
 /// <summary>
 /// A parsed global hotkey: Win32 modifier flags plus a virtual key code.
-/// Round-trips to the human-readable form stored in config.json ("Ctrl+Shift+F9").
+/// Round-trips to the human-readable form stored in config.json ("Alt+Space").
 /// </summary>
 internal sealed record Hotkey(uint Modifiers, uint VirtualKey)
 {
-    /// <summary>SPEC 8.2 defaults. Function keys avoid the AltGr and in-app shortcut traps.</summary>
-    internal static readonly Hotkey DefaultCapture =
-        new(Native.MOD_CONTROL | Native.MOD_SHIFT, (uint)Keys.F9);
+    /// <summary>Default hotkeys.</summary>
+    internal static readonly Hotkey DefaultCapture = new(Native.MOD_ALT, (uint)Keys.Space);
 
-    internal static readonly Hotkey DefaultPlayback =
-        new(Native.MOD_CONTROL | Native.MOD_SHIFT, (uint)Keys.F10);
+    internal static readonly Hotkey DefaultPlayback = new(Native.MOD_ALT, (uint)Keys.V);
 
     internal static bool TryParse(string? text, out Hotkey hotkey)
     {

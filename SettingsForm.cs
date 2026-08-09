@@ -90,8 +90,7 @@ internal sealed class SettingsForm : Form
         AddRow("Pause hotkey", _playback);
         AddHint(
             "The pause hotkey resumes a paused reading, and replays the last one from the " +
-            "beginning once it has finished. Hold Ctrl, Shift or Alt and press a key. " +
-            "Function keys conflict least.");
+            "beginning once it has finished. Hold Ctrl, Shift or Alt and press a key while focused on the input box to set a custom hotkey.");
 
         BuildLanguageCombo(config);
         AddRow("OCR language", _language);

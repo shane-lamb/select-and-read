@@ -342,7 +342,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
     /// <summary>
     /// Runs one reading inside the Speaking state, owning the ESC hook lifecycle
-    /// (SPEC 8.3), the menu enablement and the clipboard copy - all of which are
+    /// (SPEC 8.2), the menu enablement and the clipboard copy - all of which are
     /// identical whichever engine produced the audio, and whether it is a first reading or a
     /// replay.
     /// </summary>
