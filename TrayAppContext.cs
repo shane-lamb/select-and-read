@@ -73,7 +73,13 @@ internal sealed class TrayAppContext : ApplicationContext
             Visible = true,
             ContextMenuStrip = menu,
         };
-        _tray.DoubleClick += (_, _) => BeginCapture();
+        // Nothing is bound to the double click: it raises Click first, so capture on the
+        // double click would open Settings and then throw the overlay over the top of it.
+        // Capture keeps the hotkey and the menu item.
+        _tray.MouseClick += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Left) ShowSettings();
+        };
 
         _hotkeys.CapturePressed += OnCaptureHotkey;
         _hotkeys.PlaybackPressed += OnPlaybackHotkey;
