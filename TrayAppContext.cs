@@ -481,26 +481,53 @@ internal sealed class TrayAppContext : ApplicationContext
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? "unknown";
 
+    /// <summary>
+    /// The three sizes for the icon are fractions of the canvas rather than pixel constants, because
+    /// <c>icon.ico</c> is drawn from the same fractions and the two must stay the same
+    /// mark.
+    /// </summary>
+    private const float RingFraction = 0.04f;
+    private const float LetterFraction = 0.70f;
+
     private static Icon CreateTrayIcon()
     {
-        using var bmp = new Bitmap(32, 32, PixelFormat.Format32bppArgb);
+        const int size = 32;
+        const float ring = size * RingFraction;
+
+        using var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
 
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
 
-            using var fill = new SolidBrush(Color.FromArgb(90, 160, 255));
-            g.FillEllipse(fill, 1, 1, 30, 30);
+            using var dark = new SolidBrush(Color.Black);
+            using var light = new SolidBrush(Color.White);
+            g.FillEllipse(light, 0, 0, size - 1, size - 1);
+            g.FillEllipse(dark, ring, ring, size - 1 - ring * 2, size - 1 - ring * 2);
 
-            using var font = new Font(SystemFonts.DefaultFont.FontFamily, 18, FontStyle.Bold, GraphicsUnit.Pixel);
-            using var fore = new SolidBrush(Color.White);
-            using var format = new StringFormat
+            // Centred on the glyph's ink, not on a centred StringFormat. The latter centres
+            // the font's line box, whose ascent and descent are not symmetric about the
+            // cap-to-baseline block a lone "S" actually occupies, so it lands the letter
+            // roughly 4% of the icon low — visible in a 16px tray icon, and dependent on
+            // whichever font the system hands back.
+            using var glyph = new GraphicsPath();
+            glyph.AddString(
+                "S",
+                SystemFonts.DefaultFont.FontFamily,
+                (int)FontStyle.Bold,
+                size * LetterFraction,
+                PointF.Empty,
+                StringFormat.GenericTypographic);
+
+            var ink = glyph.GetBounds();
+            using (var centre = new Matrix())
             {
-                Alignment = StringAlignment.Center,
-                LineAlignment = StringAlignment.Center,
-            };
-            g.DrawString("S", font, fore, new RectangleF(0, 0, 32, 32), format);
+                centre.Translate((size - ink.Width) / 2 - ink.X, (size - ink.Height) / 2 - ink.Y);
+                glyph.Transform(centre);
+            }
+
+            g.FillPath(light, glyph);
         }
 
         // Icon.FromHandle does not take ownership, so clone into a managed icon and
