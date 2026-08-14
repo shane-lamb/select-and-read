@@ -24,6 +24,7 @@ internal sealed class SettingsForm : Form
     private readonly Label _rateLabel = new();
     private readonly CheckBox _upscale = new();
     private readonly CheckBox _clipboard = new();
+    private readonly CheckBox _highlight = new();
     private readonly CheckBox _startWithWindows = new();
 
     private readonly CheckBox _useCloud = new();
@@ -103,6 +104,7 @@ internal sealed class SettingsForm : Form
 
         AddCheck(_upscale, "Upscale small text before OCR (improves accuracy)", config.UpscaleBeforeOcr);
         AddCheck(_clipboard, "Copy recognised text to the clipboard", config.CopyToClipboard);
+        AddCheck(_highlight, "Mark each word on screen as it is read", config.HighlightWhileReading);
         AddCheck(_startWithWindows, "Start with Windows", Config.IsStartWithWindowsEnabled());
 
         BuildCloudControls(config);
@@ -580,6 +582,7 @@ internal sealed class SettingsForm : Form
         SpeakingRate = _rate.Value / 10.0,
         UpscaleBeforeOcr = _upscale.Checked,
         CopyToClipboard = _clipboard.Checked,
+        HighlightWhileReading = _highlight.Checked,
         StartWithWindows = _startWithWindows.Checked,
         UseCloudEngine = _useCloud.Checked,
         CloudModel = (_cloudModel.SelectedItem as ModelItem)?.Id ?? Config.DefaultCloudModel,

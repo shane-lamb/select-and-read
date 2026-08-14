@@ -61,6 +61,19 @@ internal sealed class RealtimeReadingEngine : IReadingEngine
 
     public void DiscardReplay() => _retained.Clear();
 
+    /// <summary>
+    /// Never raised, and implemented as a pair of empty accessors to say so rather than to
+    /// silence a warning. This engine is handed finished audio and a spoken transcript that
+    /// is the model's own reading rather than the recognised text, with no per-word timing
+    /// and no idea where on the page anything was, so there is nothing it could point at
+    /// (SPEC 16.3).
+    /// </summary>
+    public event Action<Rectangle?>? WordHighlighted
+    {
+        add { }
+        remove { }
+    }
+
     public void ApplySettings(Config config)
     {
         _model = Blank(config.CloudModel) ? Config.DefaultCloudModel : config.CloudModel;

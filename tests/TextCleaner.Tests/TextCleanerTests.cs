@@ -1,3 +1,5 @@
+using System.Drawing;
+
 namespace SelectAndRead.Tests;
 
 /// <summary>
@@ -80,5 +82,103 @@ public class TextCleanerTests
         // "esting" and still joins them. Documents the interaction between the two rules.
         var result = TextCleaner.Clean(["inter-", "-----", "esting"]);
         Assert.Equal("interesting", result);
+    }
+}
+
+/// <summary>
+/// Covers the span table that ties cleaned text back to the screen (SPEC 16.2). Every case
+/// here is a way cleaning moves text relative to its source: the offsets are what a speech
+/// engine reports, so an error of one character points the highlight at the wrong word.
+/// </summary>
+public class TextCleanerSpanTests
+{
+    private static Rectangle Box(int x) => new(x, 100, 40, 20);
+
+    private static IReadOnlyList<TextCleaner.Word> Line(params string[] words) =>
+        words.Select((w, i) => new TextCleaner.Word(w, Box(i * 50))).ToList();
+
+    /// <summary>The text each span actually points at, which is the property that matters.</summary>
+    private static string[] Sliced(TextCleaner.Result result) =>
+        result.Spans.Select(s => result.Text.Substring(s.Start, s.Length)).ToArray();
+
+    [Fact]
+    public void SpansAddressTheirOwnWords()
+    {
+        var result = TextCleaner.CleanWords([Line("The", "quick"), Line("brown", "fox")]);
+
+        Assert.Equal("The quick brown fox", result.Text);
+        Assert.Equal(["The", "quick", "brown", "fox"], Sliced(result));
+    }
+
+    [Fact]
+    public void SpansCarryTheirSourceBox()
+    {
+        var result = TextCleaner.CleanWords([Line("alpha", "beta")]);
+
+        Assert.Equal(Box(0), result.Spans[0].Box);
+        Assert.Equal(Box(50), result.Spans[1].Box);
+    }
+
+    [Fact]
+    public void DroppedLinesDoNotShiftLaterSpans()
+    {
+        // The separator contributes no text and no span, so everything after it has to be
+        // numbered as though it were never there.
+        var result = TextCleaner.CleanWords([Line("First"), Line("-----"), Line("Second")]);
+
+        Assert.Equal("First Second", result.Text);
+        Assert.Equal(["First", "Second"], Sliced(result));
+    }
+
+    [Fact]
+    public void DeHyphenationShortensThePrecedingSpan()
+    {
+        // "inter-" loses its hyphen to the join, so its span must shrink with it - otherwise
+        // it would run one character into "esting" and every later offset would be one out.
+        var result = TextCleaner.CleanWords([Line("particularly", "inter-"), Line("esting", "results")]);
+
+        Assert.Equal("particularly interesting results", result.Text);
+        Assert.Equal(["particularly", "inter", "esting", "results"], Sliced(result));
+    }
+
+    [Fact]
+    public void CollapsedWhitespaceDoesNotShiftSpans()
+    {
+        var result = TextCleaner.CleanWords([Line("  padded  ", "\tword\t")]);
+
+        Assert.Equal("padded word", result.Text);
+        Assert.Equal(["padded", "word"], Sliced(result));
+    }
+
+    [Fact]
+    public void EmptyWordsProduceNoSpans()
+    {
+        var result = TextCleaner.CleanWords([Line("real", "", "   ", "text")]);
+
+        Assert.Equal("real text", result.Text);
+        Assert.Equal(["real", "text"], Sliced(result));
+    }
+
+    [Fact]
+    public void BoxAtFindsTheWordContainingAnOffset()
+    {
+        var result = TextCleaner.CleanWords([Line("The", "quick", "brown")]);
+
+        // "The" spans 0-2, "quick" 4-8, "brown" 10-14.
+        Assert.Equal(Box(0), TextCleaner.BoxAt(result.Spans, 0));
+        Assert.Equal(Box(0), TextCleaner.BoxAt(result.Spans, 2));
+        Assert.Equal(Box(50), TextCleaner.BoxAt(result.Spans, 4));
+        Assert.Equal(Box(100), TextCleaner.BoxAt(result.Spans, 14));
+    }
+
+    [Fact]
+    public void BoxAtReturnsNullBetweenAndBeyondSpans()
+    {
+        var result = TextCleaner.CleanWords([Line("The", "quick")]);
+
+        Assert.Null(TextCleaner.BoxAt(result.Spans, 3));    // the separating space
+        Assert.Null(TextCleaner.BoxAt(result.Spans, 99));   // past the end
+        Assert.Null(TextCleaner.BoxAt(result.Spans, -1));
+        Assert.Null(TextCleaner.BoxAt([], 0));
     }
 }

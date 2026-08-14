@@ -57,6 +57,14 @@ internal interface IReadingEngine : IDisposable
 
     /// <summary>Immediate, and safe to call in any state including when idle (SPEC 7.5).</summary>
     void Stop();
+
+    /// <summary>
+    /// Raised as the reading moves from word to word, with the word's box in crop
+    /// coordinates, and with null when there is nothing to mark (SPEC 16). Engines that
+    /// cannot locate their own words - the cloud one, which is handed audio and never sees
+    /// where the text was - simply never raise it. Raised off the UI thread.
+    /// </summary>
+    event Action<Rectangle?>? WordHighlighted;
 }
 
 /// <summary>
@@ -78,11 +86,32 @@ internal sealed class LocalReadingEngine : IReadingEngine
     /// </summary>
     private string? _lastSpoken;
 
+    /// <summary>
+    /// Where the words of <see cref="_lastSpoken"/> were on screen. Retained alongside it so
+    /// a replay highlights as it reads, rather than being the one reading that does not.
+    /// Empty for a status message, which has no place on the page to point at.
+    /// </summary>
+    private IReadOnlyList<TextCleaner.Span> _lastSpans = [];
+
     public bool IsSpeaking => _speech.IsSpeaking;
 
     public bool CanReplay => _lastSpoken is not null;
 
-    public void DiscardReplay() => _lastSpoken = null;
+    public event Action<Rectangle?>? WordHighlighted;
+
+    internal LocalReadingEngine()
+    {
+        // The synthesiser reports an offset into the text it was given; only this class knows
+        // what that text was recognised from, so the translation belongs here.
+        _speech.WordSpoken += offset => WordHighlighted?.Invoke(
+            offset is { } at ? TextCleaner.BoxAt(_lastSpans, at) : null);
+    }
+
+    public void DiscardReplay()
+    {
+        _lastSpoken = null;
+        _lastSpans = [];
+    }
 
     public void ApplySettings(Config config)
     {
@@ -101,7 +130,7 @@ internal sealed class LocalReadingEngine : IReadingEngine
     {
         // A new reading is the one thing that supersedes the last one; every other way a
         // reading can end leaves it replayable.
-        _lastSpoken = null;
+        DiscardReplay();
 
         _ocr ??= OcrService.Create(_ocrLanguage);
 
@@ -114,17 +143,18 @@ internal sealed class LocalReadingEngine : IReadingEngine
             return null;
         }
 
-        var text = await _ocr.RecognizeAsync(crop, _upscale);
+        var recognition = await _ocr.RecognizeDetailedAsync(crop, _upscale);
 
-        if (string.IsNullOrWhiteSpace(text))
+        if (string.IsNullOrWhiteSpace(recognition.Text))
         {
             await SpeakStatusAsync("No text found.", cancellationToken);
             return null;
         }
 
-        _lastSpoken = text;
-        await _speech.SpeakAsync(text, cancellationToken);
-        return text;
+        _lastSpoken = recognition.Text;
+        _lastSpans = recognition.Spans;
+        await _speech.SpeakAsync(recognition.Text, cancellationToken);
+        return recognition.Text;
     }
 
     /// <summary>
@@ -135,8 +165,11 @@ internal sealed class LocalReadingEngine : IReadingEngine
     internal async Task<string?> SpeakStatusAsync(string message, CancellationToken cancellationToken)
     {
         // Retained like any other reading: "did it say no text found, or capture failed?" is
-        // exactly the question a user who missed it wants the replay hotkey to answer.
+        // exactly the question a user who missed it wants the replay hotkey to answer. It has
+        // no spans, so it reads without marking anything - there is nothing on screen it came
+        // from.
         _lastSpoken = message;
+        _lastSpans = [];
         await _speech.SpeakAsync(message, cancellationToken);
         return null;
     }

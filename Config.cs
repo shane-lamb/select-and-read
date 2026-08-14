@@ -25,6 +25,14 @@ internal sealed class Config
     public bool CopyToClipboard { get; set; } = true;
     public bool StartWithWindows { get; set; }
 
+    /// <summary>
+    /// Whether to mark each word on screen as it is read (SPEC 16). On by default: following
+    /// along is the point of it, and a user who does not want a mark is better served by an
+    /// obvious switch than by the feature never existing. Has no effect while the cloud
+    /// engine is reading, which cannot locate its own words.
+    /// </summary>
+    public bool HighlightWhileReading { get; set; } = true;
+
     // --- Cloud reading engine (SPEC 14) -----------------------------------------
     // Opt-in and off by default: the local path is free, offline and private, and none of
     // that should change without the user asking. The API key itself lives in ApiKeyStore,

@@ -17,6 +17,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly HotkeyManager _hotkeys = new();
     private readonly LocalReadingEngine _local = new();
     private readonly EscapeWatcher _escape = new();
+    private readonly HighlightOverlay _highlight = new();
     private readonly ToolStripMenuItem _stopItem;
     private readonly ToolStripMenuItem _replayItem;
 
@@ -41,6 +42,13 @@ internal sealed class TrayAppContext : ApplicationContext
     /// finish quietly instead of clobbering the current one's state.
     /// </summary>
     private int _operationId;
+
+    /// <summary>
+    /// Where the last crop was taken from. The engine locates words within the crop, so this
+    /// is the offset that turns those boxes back into screen positions - and because the app
+    /// works in one coordinate space it is a plain addition (SPEC 4.1, 16.4).
+    /// </summary>
+    private Point _cropOrigin;
 
     internal TrayAppContext()
     {
@@ -84,6 +92,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _hotkeys.CapturePressed += OnCaptureHotkey;
         _hotkeys.PlaybackPressed += OnPlaybackHotkey;
         _escape.EscapePressed += StopSpeaking;
+        _local.WordHighlighted += OnWordHighlighted;
 
         ApplyEngineSettings();
         RegisterHotkeys();
@@ -249,7 +258,13 @@ internal sealed class TrayAppContext : ApplicationContext
             }
 
             _state = State.Working;
-            crop = ScreenCapture.Crop(frame, selection.Value);
+
+            // Clamped here rather than left to Crop, which clamps identically: the highlight
+            // adds this origin to every word box, so it has to be the crop's real origin and
+            // not merely where the drag started.
+            var region = Rectangle.Intersect(selection.Value, new Rectangle(Point.Empty, screen));
+            _cropOrigin = region.Location;
+            crop = ScreenCapture.Crop(frame, region);
         }
 
         using var _ = crop;
@@ -389,11 +404,32 @@ internal sealed class TrayAppContext : ApplicationContext
             if (operationId == _operationId)
             {
                 _escape.Stop();
+                _highlight.Clear();
                 _state = State.Idle;
                 SetStopEnabled(false);
                 SetReplayEnabled(engine.CanReplay);
             }
         }
+    }
+
+    // --- Reading position (SPEC 16) ---------------------------------------------
+
+    /// <summary>
+    /// Moves the highlight to the word now being read. The box arrives in crop coordinates
+    /// from a timer thread; the overlay marshals to the UI thread itself.
+    ///
+    /// The mark is deliberately not suppressed when the screen behind it has changed. It
+    /// cannot be detected without holding the freeze frame alive for the whole reading, which
+    /// the pipeline goes out of its way not to do - and a user who has scrolled the page away
+    /// has stopped following the mark anyway.
+    /// </summary>
+    private void OnWordHighlighted(Rectangle? word)
+    {
+        if (!_config.HighlightWhileReading) return;
+
+        _highlight.Show(word is { } box
+            ? box with { X = box.X + _cropOrigin.X, Y = box.Y + _cropOrigin.Y }
+            : null);
     }
 
     private void Report(string title, string message, ToolTipIcon icon = ToolTipIcon.Error) =>
@@ -414,6 +450,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _local.Stop();
         _cloud?.Stop();
         _escape.Stop();
+        _highlight.Clear();
         if (_state is State.Speaking or State.Paused) _state = State.Idle;
         SetStopEnabled(false);
     }
@@ -594,6 +631,7 @@ internal sealed class TrayAppContext : ApplicationContext
             _icon.Dispose();
             _hotkeys.Dispose();
             _escape.Dispose();
+            _highlight.Dispose();
             _local.Dispose();
             _cloud?.Dispose();
         }
