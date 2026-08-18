@@ -73,9 +73,9 @@ is shown at the bottom of the tray menu.
 
 ## Deploying to the test VM
 
-Development happens on a Mac, so the app is exercised in a Parallels Windows 11 ARM64 VM.
-One command builds it, pushes it to the guest, and starts it there with its tray icon and
-hotkeys live:
+Development happens on a Mac, so the app is exercised in a VMware Fusion Windows 11 ARM64
+VM. One command builds it, pushes it to the guest, and starts it there with its tray icon
+and hotkeys live:
 
 ```bash
 ./tests/vm/deploy.sh --run
@@ -91,7 +91,7 @@ skips the publish and reuses the existing binary, and combines with either mode:
 Stop it again with:
 
 ```bash
-prlctl exec "Windows 11" cmd /c 'taskkill /IM SelectAndRead.exe /F'
+./tests/vm/deploy.sh --stop
 ```
 
 **A successful `--run` looks like nothing happened.** The app has no window — it is a tray
@@ -101,24 +101,27 @@ before the process even exists, so an immediate `tasklist` finds nothing. The sc
 for the process and prints its PID and session, which is the thing to trust; press
 `Alt+Space` in the guest to confirm it is actually listening.
 
-The script expects a running VM named `Windows 11` (override with `VM=...`) with Parallels'
-default folder sharing on; staging goes through `~/Downloads` because that is one of the
-three shared folders. It always kills a stranded `SelectAndRead.exe` before copying, since
-a running binary cannot be overwritten and a leftover overlay contaminates the next capture.
+The script expects the VM to be **already running, started from the Fusion window** — it
+deliberately will not start it for you, because `vmrun start` takes ownership away from the
+Fusion UI and leaves the VM showing as locked. Override the location with `VMX=...`. It
+needs VMware Tools running in the guest and two passwords in the login keychain (the VM is
+encrypted, so there is one for the encryption and one for the Windows account); it prints
+the `security add-generic-password` lines if either is missing. It always kills a stranded
+`SelectAndRead.exe` before copying, since a running binary cannot be overwritten and a
+leftover overlay contaminates the next capture.
 
-`--run` cannot go through `prlctl exec` directly: that lands in session 0 as SYSTEM, which
-can neither draw nor receive input, so the launch is relayed through a scheduled task with
-an `Interactive` principal. That and three other traps are written up in
-[tests/vm/README.md](tests/vm/README.md) — read it before driving the VM by hand.
+There are three more modes, all of which keep the passwords in the keychain rather than on
+a command line:
 
-## Status
+```bash
+./tests/vm/deploy.sh --shot guest.png        # screenshot the guest, overlay and all
+./tests/vm/deploy.sh --exec 'tasklist /NH'   # run one command, print its output
+./tests/vm/deploy.sh --force-copy            # re-copy the exe even if unchanged
+```
 
-The core pipeline is **verified working on Windows 11 ARM64** (build 26200): capture,
-overlay, pixel-exact crop, OCR, and speech. OCR of real Windows-rendered text comes back
-character-for-character exact.
-
-Not yet verified: **display scaling above 100%** (the test VM runs at 1:1), and the
-hotkeys, tray menu and settings dialog. See the manual checklist below and SPEC §13.4.
+Driving the VM by hand has ten traps that each produce a convincing false diagnosis — four
+of them in how `vmrun` mangles a guest command line. They are written up in
+[tests/vm/README.md](tests/vm/README.md); read it first.
 
 ## Testing
 
@@ -150,7 +153,7 @@ SelectAndRead.exe --freeze-to screen.png
 `--freeze-to` saves the raw capture with no overlay, which separates "the capture is wrong"
 from "the overlay or crop is wrong". `--capture-to` reports *why* a selection was cancelled.
 
-If you have the Parallels VM set up, `./tests/vm/deploy.sh` builds, deploys and runs the
+If you have the Fusion VM set up, `./tests/vm/deploy.sh` builds, deploys and runs the
 fixtures in one step — see [Deploying to the test VM](#deploying-to-the-test-vm) above.
 
 `tests/fixtures/` holds OCR images with expected output — see the
@@ -159,12 +162,8 @@ now measured output from Windows 11, not a prediction.
 
 ### Manual checklist
 
-Still unverified — the VM cannot provide these. The first is by far the most likely to
-catch a real defect, because it exercises the coordinate handling the whole design rests
-on:
+Still unverified — the VM cannot provide these.
 
-- [ ] **A display scaled to 150% or 200%.** Drag a box and confirm the captured region
-      matches the drag exactly. Verified at 100%; untested above it.
 - [ ] `Esc` during selection, during recognition, and during speech.
 - [ ] Capture hotkey pressed again mid-read — should stop and start a new selection.
 - [ ] Launch while another app already owns the hotkey — expect a tray balloon naming it.

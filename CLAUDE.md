@@ -51,15 +51,23 @@ caught locally, but nothing can be *run* here. Two consequences shape everything
   executable tests on the Mac. Keep both classes pure — `RealtimeProtocol` in particular
   must not gain a socket or a `Config` dependency (`Config` touches the registry, so
   depending on it would break the link).
-- Everything else is verified in a Parallels VM. `./tests/vm/deploy.sh` builds, deploys and
-  runs the OCR fixtures in one step; `./tests/vm/deploy.sh --run` deploys and launches the
-  app itself in the guest's interactive session (`--no-build` skips the publish).
+- Everything else is verified in a VMware Fusion VM driven by `vmrun`. `./tests/vm/deploy.sh`
+  builds, deploys and runs the OCR fixtures in one step; `./tests/vm/deploy.sh --run` deploys
+  and launches the app itself in the guest's interactive session (`--no-build` skips the
+  publish). `--exec`, `--shot` and `--stop` cover ad-hoc guest commands, screenshots and
+  teardown; prefer them over calling `vmrun` directly, which would put both the VM
+  encryption password and the guest password into shell history.
 
-**Read `tests/vm/README.md` before touching the VM.** Driving it has four non-obvious traps
-that each produce a convincing false diagnosis — `prlctl exec` runs as SYSTEM in session 0
-and cannot draw; `prlctl capture` returns solid black over a fullscreen topmost window;
-stranded `SelectAndRead.exe` processes make each run capture the previous run's overlay;
-and an unhidden driver console covers the desktop and gets captured instead of your content.
+**Read `tests/vm/README.md` before touching the VM.** Driving it has ten non-obvious traps
+that each produce a convincing false diagnosis. The four sharpest are in how `vmrun` handles
+a guest command line: it does not split the argument string into argv, so only `cmd /c`
+works and `powershell.exe` invoked directly always fails; it appends a trailing space that
+breaks any script with positional parameters; it provides no stdout channel, so output must
+be redirected in the guest and copied back; and embedded double quotes come back as "The
+filename or extension is too long". The rest cover session 0 being unable to draw without
+`-interactive`, stranded processes contaminating the next capture, an unhidden driver
+console being captured instead of your content, `vmrun start` locking you out of the Fusion
+UI, `runScriptInGuest` hanging forever, and a blanked display photographing as solid black.
 
 ## Architecture
 

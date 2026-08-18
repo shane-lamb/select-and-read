@@ -212,9 +212,11 @@ internal static class Program
     /// discoverable by a human opening it on a small display. The exit code makes it usable
     /// as a check rather than just a readout.
     ///
-    /// Note this is genuinely useful under `prlctl exec`, despite session 0 being unable to
-    /// draw: session 0's desktop is a 1024x768 one, which is a far better proxy for a
-    /// cramped real display than the VM's own 4K interactive session.
+    /// Note this is genuinely useful run without `vmrun`'s `-interactive`, despite session 0
+    /// being unable to draw: session 0's desktop is a 1024x768 one, which is a far better
+    /// proxy for a cramped real display than the 2048x1440 working area of the VM's own
+    /// interactive session. vmrun propagates the guest's exit code back to the Mac shell, so
+    /// the check below is usable from there directly.
     /// </summary>
     private static int SettingsMetrics(Config config)
     {

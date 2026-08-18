@@ -15,114 +15,156 @@ so the tray icon, hotkeys and audio are live:
 ./tests/vm/deploy.sh --run
 ```
 
-`--run` deliberately waits for the process to appear before reporting success. The
-scheduled task returns as soon as it is queued, and the 150 MB single-file exe then spends
-several seconds unpacking, so an immediate `tasklist` shows nothing — and the app itself
-has no window, with its tray icon tucked behind the taskbar's `^` chevron on a stock
-Windows 11. "It didn't start" is almost always one of those two. Check the printed session
-number: session 0 means the interactive relay failed and the app cannot draw.
+`--run` deliberately waits for the process to appear before reporting success. The 148 MB
+single-file exe spends several seconds unpacking, so an immediate process list shows
+nothing — and the app itself has no window, with its tray icon tucked behind the taskbar's
+`^` chevron on a stock Windows 11. "It didn't start" is almost always one of those two.
 
 `--no-build` skips the publish and reuses the existing binary; it combines with `--run`.
-Either mode kills a stranded `SelectAndRead.exe` first — see trap 3 — because a running
-binary also cannot be overwritten by the copy. Stop the app with:
+Either mode kills a stranded `SelectAndRead.exe` first — see trap 6 — because a running
+binary also cannot be overwritten by the copy. The other modes:
 
 ```bash
-prlctl exec "Windows 11" cmd /c 'taskkill /IM SelectAndRead.exe /F'
+./tests/vm/deploy.sh --stop                 # kill the app in the guest
+./tests/vm/deploy.sh --shot /tmp/guest.png  # screenshot the guest, overlay and all
+./tests/vm/deploy.sh --exec 'query session' # run one command, print its output
 ```
 
-## Six things that will waste your afternoon if you don't know them
+Prefer `--exec` over calling `vmrun` by hand. Every direct `vmrun` invocation needs
+`-vp` and `-gp` on the command line, which puts both passwords into your shell history;
+`--exec` reads them from the keychain instead, and applies the quoting rules in traps 1–4
+for you.
 
-These were all learned the hard way during bring-up. None are obvious, and each produced a
-convincing false diagnosis first.
+## Before any of it works
 
-**1. `prlctl exec` runs as SYSTEM, in session 0.** It cannot draw, cannot receive input,
-and has its own `%APPDATA%`. It is fine for `--ocr-file`, and useless for the overlay,
-hotkeys or audio. For anything interactive, use `launch-interactive.ps1`, which registers a
-scheduled task with an `Interactive` principal so the process lands in the logged-on user's
-session:
+**Three prerequisites, each of which fails in a way that looks like something else.**
+
+**Credentials, from the login keychain.** Two secrets, because the VM is encrypted —
+Windows 11 requires a vTPM and VMware requires an encrypted config to hold one, so
+`vmx.encryptionType = "partial"` and *every* `vmrun` call needs `-vp` as well as
+`-gu`/`-gp`. Store them once:
 
 ```bash
-prlctl exec "Windows 11" powershell -NoProfile -ExecutionPolicy Bypass \
-  -File 'C:\sar-test\launch-interactive.ps1' \
-  -Command 'powershell.exe' -Arguments '-NoProfile -WindowStyle Hidden -File C:\sar-test\my-test.ps1'
+security add-generic-password -s sar-vm-encryption -a vm -w
+security add-generic-password -s sar-vm-guest -a kryte -w
 ```
 
-`-Arguments` is optional, but never pass it empty: `New-ScheduledTaskAction` rejects both a
-missing `-Argument` and an empty one, so the script splats it in only when it has a value.
-Always pass `-WindowStyle Hidden` to the driving PowerShell: otherwise its console
-window covers the desktop, and the app faithfully captures **that** instead of your test
-content. A crop full of black with your own script's output in it is this, not a bug.
+`-w` with no value prompts, so neither reaches shell history. Both passwords still land in
+`vmrun`'s argv and are briefly visible in `ps`, which is accepted for a local test VM and is
+why `deploy.sh` must never gain `set -x`.
 
-**2. `prlctl capture` returns solid black while a fullscreen topmost GDI window is up.**
-It cannot photograph the overlay. To see what the overlay actually looks like, run
-`SelectAndRead.exe --freeze-to shot.png` from a *second* process while the overlay is
-displayed — the app's own capture path works fine where the VM's framebuffer grab does not.
+**VMware Tools must be installed and running in the guest.** Every guest operation goes
+through it. Without it `vmrun` hangs for about four minutes and then reports
+`VIX_E_TOOLS_NOT_RUNNING`, and `checkToolsState` says `unknown` rather than anything
+diagnostic. A VM carried over from another hypervisor will not have it. Install it from
+Fusion's **Virtual Machine > Install VMware Tools**, run `setup.exe` from the mounted CD,
+and reboot.
 
-**3. Kill leftover `SelectAndRead.exe` between runs.** A stranded overlay from a previous
+**The guest must be started from the Fusion UI, logged in, and unlocked.** Not merely
+powered on: `-interactive` needs a live console session to target, and a lock screen makes
+every interactive command fall back to a session that cannot draw.
+
+## Ten things that will waste your afternoon if you don't know them
+
+These were all measured on VMware Fusion 26 against Windows 11 ARM64. None are obvious, and
+each produced a convincing false diagnosis first.
+
+**1. `runProgramInGuest` does not split its argument string into argv.** It hands the whole
+blob to the program, so only something that re-parses its own command line will cope.
+`cmd.exe /c` does. `powershell.exe` does not, and fails with exit 1 every single time, with
+no output anywhere to say why. Always go through `cmd.exe`:
+
+```bash
+vmrun ... runProgramInGuest "$VMX" -interactive 'C:\Windows\System32\cmd.exe' '/c powershell -NoProfile -File C:\sar-test\x.ps1 > C:\Users\Public\x.log 2>&1'
+```
+
+**2. vmrun appends a trailing space to that argument string.** Usually invisible — a
+redirect target absorbs it, and most programs ignore it. It is fatal to a PowerShell script
+with positional parameters, which binds the space and dies with `Cannot convert value " " to
+type "System.Int32"`, and to `taskkill /F`, which reports `Invalid argument/option - ' '`.
+Terminate the command so the space lands somewhere harmless:
+
+```
+/v:on /c <command> > C:\Users\Public\out.log 2>&1 & exit /b !ERRORLEVEL!
+```
+
+`/v:on` is what makes `!ERRORLEVEL!` expand at run time rather than parse time. This is the
+shape `deploy.sh`'s `guest()` helper uses for everything, and it absorbs the trailing space
+while still propagating the guest's real exit code.
+
+**3. There is no stdout channel from the guest.** `runProgramInGuest` returns an exit code
+and nothing else. Worse, `SelectAndRead.exe` invoked bare prints *nowhere at all*:
+`AttachToParentConsole` writes only to a parent console it can attach to or to an existing
+redirect, and vmrun gives it neither. Redirect inside the guest and copy the file back —
+`--exec` does this for you.
+
+**4. Embedded double quotes are mangled.** A command containing `"` comes back as
+`The filename or extension is too long.` Write guest command lines without them; if a path
+has spaces, use its 8.3 form or move the file.
+
+**5. Only `-interactive` can draw.** Without it a guest command lands in session 0 — as the
+real user, with the real profile, but on a 1024x768 desktop with no console window station,
+where `--freeze-to` fails with `Screen capture failed.` and exit 3. With `-interactive` it
+lands in the logged-on session (`SessionId` matches explorer's, `WindowStation=Console`) and
+everything works. Session 0 is still genuinely useful for `--settings-metrics`, whose whole
+point is a cramped display: it reports a 1024x768 working area there against 2048x1440 in
+the real session.
+
+**6. Kill leftover `SelectAndRead.exe` between runs.** A stranded overlay from a previous
 run is on screen when the next run captures, so run N captures run N−1's dim wash. The
-symptom is a crop that gets darker with each attempt.
+symptom is a crop that gets darker with each attempt. Use `--stop`, which kills by pid via
+`killProcessInGuest` — `taskkill` through `cmd` walks straight into trap 2.
 
-```bash
-prlctl exec "Windows 11" cmd /c 'taskkill /IM SelectAndRead.exe /F'
-```
+**7. Hide the driving console.** Always pass `-WindowStyle Hidden` to a driving PowerShell,
+or its console window covers the desktop and the app faithfully captures *that* instead of
+your test content. A crop full of your own script's output is this, not a bug.
 
-**4. Only Desktop, Documents and Downloads are shared** by default, so staging goes through
-`~/Downloads`. Inside the guest the share is `\\Mac\Home\...`; the `Z:` mapping shown by
-`net use` belongs to the interactive user and is not visible to SYSTEM. Use `robocopy`
-rather than `copy` — `copy` with a wildcard against the share fails with a confusing
-"cannot find the path specified".
+**8. Never start the VM with `vmrun start`.** It works, but it spawns a `vmware-vmx` that
+the Fusion window cannot attach to, so the VM shows as locked and you cannot open it for the
+rest of the session. `deploy.sh` deliberately refuses to start a stopped VM and tells you to
+use the Fusion UI instead. A VM started from the UI is fully drivable by `vmrun`.
 
-**5. `--read-file` will never see the key you saved in Settings.** The API key is DPAPI
-encrypted at `CurrentUser` scope and stored under `%APPDATA%`, and per trap 1 `prlctl exec`
-runs as SYSTEM with *its own* `%APPDATA%` — so a key entered in the GUI (interactive user)
-cannot be found or decrypted by a `prlctl exec` run, and vice versa. Both halves of that
-fail identically and silently:
+**9. `runScriptInGuest` hangs.** It looks like the tidy way to run a multi-line script and
+never returns — killed after eight minutes with no output. Copy a `.ps1` in and run it
+through `cmd /c powershell -File` instead.
 
-```
-No API key is configured. Enter one in Settings, or run the app once to create it.
-```
+**10. A blanked guest display photographs as solid black.** `captureScreen` grabs the VM's
+framebuffer, so once Windows powers the display down it returns a 69-byte all-black PNG,
+indistinguishable from the app rendering black. Waking it needs a *real* input event:
+`SetCursorPos` and `[Windows.Forms.Cursor]::Position` both move the pointer without
+resetting the idle timer. `--shot` runs `wake-display.ps1` first for exactly this reason.
+Note this affects only the hypervisor's framebuffer grab; the app's own `--freeze-to` goes
+through `BitBlt` on the desktop and is unaffected.
 
-That message is usually the session mismatch, not a missing key. To exercise the cloud path
-end to end, drive it through `launch-interactive.ps1` so it runs as the logged-on user —
-the same reason the overlay and hotkeys need it. There is deliberately no CLI flag to pass a
-key in: it would end up in shell history and in the scheduled-task command line.
+## Three things this harness can do that are easy to miss
 
-**6. A scheduled task stays `Running` for as long as the process it launched.** `deploy.sh
---run` leaves `SarInteractive` in the `Running` state, because `SelectAndRead.exe` never
-exits. Every later `Start-ScheduledTask` against that same name is then refused, and the
-only evidence is a `LastTaskResult` of `2147946720` (`0x800710E0`, "the operator or
-administrator has refused the request") — `Start-ScheduledTask` itself reports success and
-`launch-interactive.ps1` still prints `started`. The symptom is a relay that silently does
-nothing while looking like it worked.
+Worth knowing about rather than working around out of habit.
 
-Pass a distinct `-TaskName` for each concurrent relay rather than reusing the default:
+**Screenshots work, including over the overlay.** `--shot` photographs a fullscreen topmost
+GDI window correctly — the crosshair, reticle and border of SPEC §2.2 are all visible in the
+resulting PNG. Use `--freeze-to` when the question is what the app *itself* sees, since that
+goes through its own capture path; use `--shot` when the question is what is on screen. The
+one thing that comes back black is a blanked display — trap 10.
 
-```bash
-prlctl exec "Windows 11" powershell -NoProfile -ExecutionPolicy Bypass \
-  -File 'C:\sar-test\launch-interactive.ps1' \
-  -Command 'cmd.exe' -Arguments '/c C:\sar-test\SelectAndRead.exe --settings-metrics > C:\Users\Public\metrics.txt 2>&1' \
-  -TaskName 'SarMetrics'
-```
+**Guest exit codes propagate.** `vmrun` reports the guest program's real exit status, so
+`--settings-metrics` and the `--ocr-file` failure codes are usable as checks directly from
+the Mac shell, and `--exec` passes them through.
 
-Check a relay actually ran with:
+**Guest commands run as the real user.** Even non-interactively, `WhoAmI` is the logged-on
+account and `%APPDATA%` is the real profile, and DPAPI `CurrentUser` round-trips in both
+sessions. An API key saved in Settings is therefore visible to a `--read-file` driven from
+here, so the cloud path can be exercised end to end without a human at the guest.
 
-```bash
-prlctl exec "Windows 11" powershell -NoProfile -Command \
-  "Get-ScheduledTask -TaskName SarMetrics | Get-ScheduledTaskInfo | Format-List LastTaskResult"
-```
+## Cost of the file transfer
 
-Two more things about relayed commands, both of which fail silently:
+Everything is copied file by file with `CopyFileFromHostToGuest`; there are no shared
+folders to configure, and no UNC paths. The price is throughput: about **1.7 MB/s**, so the
+148 MB exe takes **85 seconds**, cold or warm, with no incremental mode. The 19 fixtures and
+scripts take about 10 s together, and the fixture run itself about 5 s.
 
-- **Give the inner PowerShell `-ExecutionPolicy Bypass` of its own.** The outer `prlctl exec`
-  flag does not carry into the task.
-- **Write output somewhere the interactive user can write.** `C:\sar-test` is created by
-  SYSTEM; use `C:\Users\Public`. Allow a few seconds before reading — the relay is
-  asynchronous, and a `type` issued too early reports "cannot find the file specified",
-  which looks identical to the command having failed.
-
-**Reading an exit code back through `prlctl exec`:** `cmd /c '... & echo EXIT=%ERRORLEVEL%'`
-always prints `0`, because `%ERRORLEVEL%` is expanded when the line is parsed, before the
-command runs. Use `cmd /v:on /c '... & echo EXIT=!ERRORLEVEL!'`.
+Because that one copy dominates, `deploy.sh` stamps the exe's size and mtime in the guest
+and skips the copy when it matches, which is what makes a `--no-build --run` iteration take
+seconds rather than a minute and a half. `--force-copy` overrides it.
 
 ## Driving mouse input
 
@@ -131,7 +173,10 @@ the crop. The crop's dimensions must equal the dragged rectangle exactly — tha
 the whole coordinate contract in SPEC §4.
 
 The script must call `SetProcessDpiAwarenessContext(-4)` (per-monitor v2) before moving the
-cursor, so its coordinates are physical pixels and match what the app sees:
+cursor, so its coordinates are physical pixels and match what the app sees. This is not
+theoretical any more: the VM runs at **200% scaling**, so a DPI-unaware process is told the
+screen is 1024x768 when it is really 2048x1536, and a drag driven without that call lands at
+half the intended coordinates.
 
 ```powershell
 [void][M]::SetProcessDpiAwarenessContext([IntPtr](-4))
@@ -143,9 +188,7 @@ cursor, so its coordinates are physical pixels and match what the app sees:
 
 ## What this harness cannot test
 
-The VM runs a single 3840×2024 display at 100% scaling, so it does not exercise the app at
-any display scaling above 1:1 — the highest-risk remaining part of the design. That one is
-worth testing here rather than on real hardware: change the guest's display scaling to
-150%, re-run the drag, and confirm the crop still matches the dragged rectangle exactly.
-
-See SPEC §13.4 for the rest of what still needs a real machine.
+`typeKeystrokesInGuest` is unavailable: it fails with `Insufficient permissions in the host
+operating system`, so synthetic keystrokes cannot be injected from the Mac and the global
+hotkeys still have to be exercised by hand in the guest. Mouse input is unaffected, since
+that is driven from inside the guest by `drive-capture.ps1` rather than by vmrun.

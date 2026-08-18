@@ -1,15 +1,18 @@
 # Drives a real mouse drag over the selection overlay and saves the resulting crop.
 #
-# Run it through launch-interactive.ps1 with -WindowStyle Hidden, otherwise this script's
-# own console window covers the desktop and the app captures that instead of your content:
+# Always pass -WindowStyle Hidden, otherwise this script's own console window covers the
+# desktop and the app faithfully captures *that* instead of your content:
 #
-#   prlctl exec "Windows 11" powershell -NoProfile -ExecutionPolicy Bypass `
-#     -File 'C:\sar-test\launch-interactive.ps1' `
-#     -Command 'powershell.exe' `
-#     -Arguments '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\sar-test\drive-capture.ps1'
+#   ./tests/vm/deploy.sh --exec 'powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\sar-test\drive-capture.ps1'
+#
+# Run it any other way and read tests/vm/README.md first: vmrun appends a trailing space to
+# the guest command line, and this script's positional [int] parameters are exactly what
+# that space breaks, with `Cannot convert value " " to type "System.Int32"`.
 #
 # The crop's dimensions should equal ($X2-$X1) x ($Y2-$Y1) exactly. That equality is the
-# whole coordinate contract in SPEC 4, so it is the single most valuable assertion here.
+# whole coordinate contract in SPEC 4, so it is the single most valuable assertion here —
+# and since the VM now runs at 200% scaling, it is also the only thing proving the app is
+# right on a scaled display.
 
 param(
   [int]$X1 = 225, [int]$Y1 = 365,

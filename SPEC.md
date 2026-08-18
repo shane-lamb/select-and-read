@@ -686,22 +686,29 @@ the two are the same mark and should stay in step.
 
 ### 13.1 Environment
 
-Development happens on an Apple Silicon Mac. A **Parallels VM running Windows 11 ARM64
-(build 26200)** is available and is where all runtime verification is done.
+Development happens on an Apple Silicon Mac. A **VMware Fusion 26 VM running Windows 11
+ARM64** is available and is where all runtime verification is done.
 
-The VM is drivable entirely from the Mac, which is what makes this practical:
+The VM is drivable entirely from the Mac with `vmrun`, which is what makes this practical:
 
-- `prlctl exec "<vm>" …` runs commands inside the guest — but as `NT AUTHORITY\SYSTEM`, in
-  session 0, which **cannot draw or receive input**. Anything involving the overlay,
-  hotkeys or audio must be launched into the logged-on user's session via a scheduled task
-  with an `Interactive` principal (see `tests/vm/`).
-- `prlctl capture "<vm>" --file x.png` screenshots the guest — **but returns solid black
-  while a fullscreen topmost GDI window is up**, so it cannot photograph the overlay.
-  Use the app's own `--freeze-to` from a second process for that instead. Several
-  apparently alarming "the overlay renders black" results during bring-up were this
-  artifact rather than app behaviour.
-- Parallels shares only Desktop/Documents/Downloads by default, so builds are staged
-  through `~/Downloads` and copied to `C:\` with `robocopy`.
+- `vmrun … runProgramInGuest <vmx> -interactive …` runs commands in the logged-on user's
+  console session, where the overlay, hotkeys and audio all work. Without `-interactive`
+  the command lands in session 0, which **cannot draw** — `--freeze-to` there fails with
+  `Screen capture failed.` Both sessions run as the real user with the real profile, so
+  DPAPI and the saved API key work either way.
+- `vmrun … captureScreen <vmx> x.png` screenshots the guest, **including over the
+  fullscreen topmost overlay**. It returns solid black only if the guest display has
+  blanked.
+- Files go in one at a time with `CopyFileFromHostToGuest`; there are no shared folders and
+  no UNC paths. The cost is throughput — about 1.7 MB/s, so the 148 MB exe takes 85 s, which
+  is why `tests/vm/deploy.sh` stamps it in the guest and skips unchanged copies.
+- The VM is encrypted (Windows 11 needs a vTPM, and VMware requires an encrypted config to
+  hold one), so every call also needs `-vp`. Both that and the guest password come from the
+  login keychain.
+
+`vmrun`'s guest operations all depend on VMware Tools running in the guest, and its command
+line has four sharp edges that produce convincing false diagnoses. Both are written up in
+`tests/vm/README.md`, which is required reading before driving the VM.
 
 Windows 10 support still rests on API-level compatibility (§12.1) rather than testing:
 Apple Silicon can only virtualise Windows 11 ARM64.
@@ -731,9 +738,9 @@ Apple Silicon can only virtualise Windows 11 ARM64.
 
 | Behaviour | Result |
 |---|---|
-| Freeze-frame capture of the screen | 3840×2024, correct content |
-| Overlay: dim wash, undimmed selection, border, `W × H` readout | Correct — photographed live, but against the *pre-accessibility* overlay. The undimmed pre-drag state, crosshair, reticle, double-stroke border and corner brackets of §2.2 are **not yet verified on hardware** |
-| Drag → crop coordinate fidelity | **Pixel-exact**: a (225,365)–(1260,665) drag produced exactly 1035×300 |
+| Freeze-frame capture of the screen | 2048×1536, correct content, at 200% scaling |
+| Overlay: dim wash, undimmed selection, border, `W × H` readout | Correct — photographed live, but against the *pre-accessibility* overlay. Of §2.2's additions, the undimmed pre-drag state, the screen-spanning crosshair and its reticle are now confirmed by `vmrun captureScreen`; the double-stroke border and corner brackets are still **unverified** |
+| Drag → crop coordinate fidelity | **Pixel-exact, and at 200% scaling**: a (225,365)–(1260,665) drag produced exactly 1035×300 |
 | OCR of real Windows-rendered text | 100% exact, character for character |
 | Upscaling on vs off | On: exact. Off: drops leading characters |
 | De-hyphenation against real OCR output | Correct |
@@ -746,12 +753,9 @@ Apple Silicon can only virtualise Windows 11 ARM64.
 These need hardware or conditions the VM cannot provide, and remain on the README's
 manual checklist:
 
-- **Display scaling above 100%.** The VM is a single 3840×2024 display at 100% scaling, so
-  while the coordinate discipline in §4 is confirmed pixel-exact, it has only been proven
-  at 1:1. A scaled display (125%/150%/200%) is the remaining case where a DPI mistake
-  would show up, and is easy to test: set the VM's scaling and re-run the drag.
-- Global hotkey registration and conflict reporting (needs an interactive logon session
-  driving real keystrokes).
+- Global hotkey registration and conflict reporting. This still needs a human at the guest:
+  `vmrun typeKeystrokesInGuest` fails with `Insufficient permissions in the host operating
+  system`, so keystrokes cannot be injected from the Mac the way mouse input can.
 - **Whether the settings dialog's hotkey box can capture the default chords.** `Alt+Space` and
   `Alt+<letter>` arrive as `WM_SYSKEYDOWN` and would otherwise open the window menu or match
   a control mnemonic; `HotkeyBox` claims them via `IsInputKey` and `Handled`, which should
@@ -759,7 +763,8 @@ manual checklist:
   is still registrable — the user just could not rebind *to* it from the dialog.
 - The tray icon and menu.
 - The settings dialog's *appearance*. Its geometry is now checked by `--settings-metrics`
-  (§10.1) at both 1024×768 and 3840×1926, but nothing confirms it looks right, and it has
+  (§10.1) at both 1024×768 (session 0's desktop) and the 2048×1440 working area of the real
+  session, and Save is reachable in both, but nothing confirms it looks right, and it has
   not been exercised at a raised system text size — historically where this dialog breaks.
 - ESC cancellation mid-playback.
 - **Pause, resume and replay (§2.5), on either engine.** Nothing here has run: whether
