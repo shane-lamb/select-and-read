@@ -700,8 +700,10 @@ The VM is drivable entirely from the Mac with `vmrun`, which is what makes this 
   fullscreen topmost overlay**. It returns solid black only if the guest display has
   blanked.
 - Files go in one at a time with `CopyFileFromHostToGuest`; there are no shared folders and
-  no UNC paths. The cost is throughput — about 1.7 MB/s, so the 148 MB exe takes 85 s, which
-  is why `tests/vm/deploy.sh` stamps it in the guest and skips unchanged copies.
+  no UNC paths. The cost is throughput — about 1.7 MB/s, which is why `tests/vm/deploy.sh`
+  publishes framework-dependent (25 MB, ~16 s) rather than self-contained, and why it also
+  stamps the exe in the guest and skips unchanged copies. The guest has the .NET 10 Desktop
+  Runtime installed to make that possible.
 - The VM is encrypted (Windows 11 needs a vTPM, and VMware requires an encrypted config to
   hold one), so every call also needs `-vp`. Both that and the guest password come from the
   login keychain.
@@ -719,9 +721,12 @@ Apple Silicon can only virtualise Windows 11 ARM64.
    `EnableWindowsTargeting` set, the Windows-targeted WinForms + WinRT project builds
    cleanly from macOS using the .NET 10 SDK; the reference packs restore from NuGet. This
    is **not** limited to compile-checking: the full `--self-contained
-   -p:PublishSingleFile=true` publish for a Windows RID works too, which is exactly what
-   `tests/vm/deploy.sh` does on every deploy — the exe it hands to the VM was built on the
-   Mac. **The only thing that requires Windows is running the result** — and, since §12.4,
+   -p:PublishSingleFile=true` publish for a Windows RID works too, which is what the release
+   workflow does. `tests/vm/deploy.sh` publishes the same project framework-dependent
+   instead, purely because 25 MB crosses to the guest six times faster than 148 MB; either
+   way the exe it hands to the VM was built on the Mac. What that leaves untested is the
+   shipped binary's own packaging — its single-file extraction and the startup delay that
+   comes with it. **The only thing that requires Windows is running the result** — and, since §12.4,
    packaging it, because ISCC is a Windows binary. That is the sole reason the release job
    is on a Windows runner; the publish inside it would be just as happy on Linux.
 2. **`TextCleaner` unit tests run anywhere.** `tests/TextCleaner.Tests` targets plain
@@ -890,7 +895,7 @@ saved-password stores offer, and the right level for a tray utility.
 
 | Question | Status |
 |---|---|
-| Does cross-compilation from macOS work for this TFM? | **Resolved: yes,** and further than a compile — .NET 10 SDK with `EnableWindowsTargeting` gives a clean build *and* a working self-contained single-file publish for a Windows RID. `tests/vm/deploy.sh` relies on it, and so does the release workflow (§12.3). |
+| Does cross-compilation from macOS work for this TFM? | **Resolved: yes,** and further than a compile — .NET 10 SDK with `EnableWindowsTargeting` gives a clean build *and* a working single-file publish for a Windows RID, self-contained or framework-dependent. The release workflow (§12.3) relies on the former, `tests/vm/deploy.sh` on the latter. |
 | Does upscaling actually improve accuracy? | **Resolved: yes,** decisively, on realistic input (§5.2). It made no clear difference on synthetic fixtures, which is why the real-capture fixture exists. |
 | How does the engine order multi-column text? | **Resolved:** by column, not interleaved line by line (§6.1). |
 | Does time-to-first-word need chunked synthesis? | **Open.** Not yet measured end to end. §7.4 ships the simple path behind an interface so chunking drops in later without redesign. |

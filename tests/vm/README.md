@@ -15,10 +15,10 @@ so the tray icon, hotkeys and audio are live:
 ./tests/vm/deploy.sh --run
 ```
 
-`--run` deliberately waits for the process to appear before reporting success. The 148 MB
-single-file exe spends several seconds unpacking, so an immediate process list shows
-nothing — and the app itself has no window, with its tray icon tucked behind the taskbar's
-`^` chevron on a stock Windows 11. "It didn't start" is almost always one of those two.
+`--run` deliberately waits for the process to appear before reporting success. The
+single-file exe spends a moment unpacking, so an immediate process list can show nothing —
+and the app itself has no window, with its tray icon tucked behind the taskbar's `^` chevron
+on a stock Windows 11. "It didn't start" is almost always one of those two.
 
 `--no-build` skips the publish and reuses the existing binary; it combines with `--run`.
 Either mode kills a stranded `SelectAndRead.exe` first — see trap 6 — because a running
@@ -37,7 +37,7 @@ for you.
 
 ## Before any of it works
 
-**Three prerequisites, each of which fails in a way that looks like something else.**
+**Four prerequisites, each of which fails in a way that looks like something else.**
 
 **Credentials, from the login keychain.** Two secrets, because the VM is encrypted —
 Windows 11 requires a vTPM and VMware requires an encrypted config to hold one, so
@@ -63,6 +63,19 @@ and reboot.
 **The guest must be started from the Fusion UI, logged in, and unlocked.** Not merely
 powered on: `-interactive` needs a live console session to target, and a lock screen makes
 every interactive command fall back to a session that cannot draw.
+
+**The .NET 10 Desktop Runtime must be installed in the guest**, because `deploy.sh` publishes
+framework-dependent to keep the copy small. Nothing in this harness will tell you it is
+missing — a `WinExe` with no runtime reports that in a message box, and traps 3 and 5 mean
+you would see neither the box nor any output. Install it with:
+
+```bash
+./tests/vm/deploy.sh --exec 'winget install Microsoft.DotNet.DesktopRuntime.10 --silent --accept-package-agreements --accept-source-agreements --disable-interactivity'
+```
+
+Check it with `--exec 'C:\Progra~1\dotnet\dotnet.exe --list-runtimes'`, which needs both
+`Microsoft.NETCore.App` and `Microsoft.WindowsDesktop.App`. Use the 8.3 path: `Program Files`
+has a space in it, and trap 4 rules out quoting it.
 
 ## Ten things that will waste your afternoon if you don't know them
 
@@ -158,9 +171,15 @@ here, so the cloud path can be exercised end to end without a human at the guest
 ## Cost of the file transfer
 
 Everything is copied file by file with `CopyFileFromHostToGuest`; there are no shared
-folders to configure, and no UNC paths. The price is throughput: about **1.7 MB/s**, so the
-148 MB exe takes **85 seconds**, cold or warm, with no incremental mode. The 19 fixtures and
-scripts take about 10 s together, and the fixture run itself about 5 s.
+folders to configure, and no UNC paths. The price is throughput: about **1.7 MB/s**, cold or
+warm, with no incremental mode. The 19 fixtures and scripts take about 10 s together, and the
+fixture run itself about 5 s.
+
+That throughput is why `deploy.sh` publishes **framework-dependent**: bundling .NET makes the
+exe 148 MB and the copy 85 s, against **25 MB and ~16 s** without it. A full build-and-deploy
+is about 45 s rather than a minute and a half. The release build stays self-contained, so
+what this does not exercise is the shipped binary's own packaging — its single-file
+extraction, and the longer startup that comes with it.
 
 Because that one copy dominates, `deploy.sh` stamps the exe's size and mtime in the guest
 and skips the copy when it matches, which is what makes a `--no-build --run` iteration take

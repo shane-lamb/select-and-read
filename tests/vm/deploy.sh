@@ -159,8 +159,9 @@ esac
 
 if (( BUILD )); then
   echo "==> building win-arm64"
+  # self-contained is false here so we don't bundle the framework, unlike the release build. This saves time transferring the exe to the VM.
   dotnet publish "$REPO/SelectAndRead.csproj" -c Release -r win-arm64 \
-    --self-contained -p:PublishSingleFile=true | tail -2
+    --self-contained false -p:PublishSingleFile=true | tail -2
 fi
 
 # Always kill first: a stranded overlay from a previous run dims the next run's capture, and
@@ -173,10 +174,6 @@ vmg createDirectoryInGuest "$VMX" "$GUEST" >/dev/null 2>&1 || true   # errors if
 
 copy_in() { vmg CopyFileFromHostToGuest "$VMX" "$1" "$GUEST\\$(basename "$1")" >/dev/null; }
 
-# The exe copies at about 1.7 MB/s, so 148 MB costs ~85 s — every time, since there is no
-# incremental mode. That dominates the whole deploy, and the binary is unchanged across most
-# iterations, so its identity is stamped in the guest and the copy skipped when it matches.
-# Everything else is small enough not to be worth the bookkeeping.
 stamp="$(stat -f '%m %z' "$PUBLISH/SelectAndRead.exe")"
 guest_stamp="$(gcat "$GUEST\\exe.stamp" 2>/dev/null || true)"
 if (( FORCE_COPY )) || [[ "$stamp" != "$guest_stamp" ]]; then
