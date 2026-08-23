@@ -265,11 +265,6 @@ first call from the speech timer would build the window on a pump-less thread. A
 must go through WinForms rather than `SWP_SHOWWINDOW` alone, or `Invalidate` no-ops on a
 window WinForms thinks is hidden.
 
-**The highlight overlay has no pixels over the word, by construction** (SPEC §16.4).
-`SetWindowRgn` cuts the middle out, which is what makes it safe over live content and
-click-through for free. A wrong region is invisible and presents as a mark that is merely
-slightly off, so run `--highlight-metrics` after touching `HighlightOverlay.cs`.
-
 **Tracking is stopped by `Stop` and never by `Pause`** (SPEC §16.4), which is the same
 distinction as §7.5. Position is read from `MediaPlaybackSession.Position` rather than from
 elapsed time, so a paused reading freezes its own mark with no extra code.

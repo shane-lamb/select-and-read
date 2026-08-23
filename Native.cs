@@ -49,6 +49,7 @@ internal static class Native
     // border and has no pixels at all over the word it marks (SPEC 16.4). Shaping the window
     // rather than painting transparently is what makes it click-through for free: the
     // removed area is not part of the window, so it cannot be hit-tested or drawn over.
+    internal const int RGN_OR = 2;
     internal const int RGN_DIFF = 4;
 
     [DllImport("gdi32.dll")]

@@ -906,7 +906,7 @@ saved-password stores offer, and the right level for a tray utility.
 | What does a cloud reading actually cost? | **Open.** Estimated at ~$0.017 (§14.1) from inferred image-token counts. `--read-file` prints real `usage`; replace the estimate with measurement. |
 | Does `MediaStreamSource` stream PCM cleanly on ARM64? | **Open.** The highest-risk untested piece of §14.3; underruns or clicks would show up here first. |
 | Does resuming a paused `MediaStreamSource` pick up cleanly mid-stream? | **Open.** Pausing a live source is the one part of §2.5 with no local equivalent to fall back on. A gap, a click or a dropped chunk on resume shows up here; the local engine's seekable stream is not at risk in the same way. |
-| Does the word mark look right on screen? | **Resolved: yes.** Photographed during a live reading advancing through `windows-ui-text.png` — "text," then "tool," then "be", each mark tight around its own word and clear of the glyphs. `tests/vm/drive-highlight.ps1` reproduces it. |
+| Does the word mark look right on screen? | **Was resolved for the box-only mark**, photographed during a live reading of `windows-ui-text.png`. **Reopened by the crosshair lines (§16.4), which are unphotographed:** the Parallels licence on the test VM has expired, so nothing Windows-side can currently be run. `tests/vm/drive-highlight.ps1` reproduces the shot once a VM is available. |
 | Does the boundary track ever take longer than 250 ms to publish? | **Open.** Measured as immediate on the fixtures, but the wait is a guess at the tail. If it is routinely exceeded the mark silently stops appearing rather than delaying audio, which is the right failure but a quiet one. |
 | Do Windows' downloadable natural voices emit boundary cues? | **Open.** All five voices on the test VM do (§16.1), but they are the OneCore set; no *Natural* voice is installed there, and §7.2 already treats their availability as a runtime probe. |
 | Does a cloud reading survive being paused past the 60 s receive timeout? | **Open.** It should: the timeout caps silence *from the server*, and the socket finishes independently of playback, so a pause should not reach it. Untested (§13.4). |
@@ -977,18 +977,38 @@ later.
 
 ### 16.4 The mark itself
 
-A window shaped like a rectangular ring: `SetWindowRgn` cuts the middle out, so the window
-has **no pixels whatsoever over the word it surrounds**. That is stronger than drawing
-transparently, and it is what makes the mark safe over a live screen — nothing to see
-through, nothing to hit-test, and no way to obscure the text a reader is trying to follow. It
-also makes click-through free, since the removed area is not part of the window at all.
+The mark is a box around the word plus screen-spanning crosshair lines centred on it —
+the same two cues the selection overlay gives the cursor (§2.2), for the same reason. A box
+alone is only findable if you already know roughly where it is; at low acuity, hunting for
+one on a 4K screen costs more than the mark saves. Lines that run the full width and height
+lead the eye to it from anywhere, and they cost nothing extra to draw.
+
+The window covers the screen and is then cut back with `SetWindowRgn` to just those strokes,
+so it has **no pixels anywhere else** — none over the word, and none over the rest of the
+desktop. That is stronger than drawing transparently, and it makes click-through free, since
+the removed area is not part of the window at all. It also relocates the worst failure: a
+region that fails to apply no longer means a mark covering one word, it means an opaque
+rectangle over the whole screen with no window a user could close.
 
 `WS_EX_NOACTIVATE` and `ShowWithoutActivation` keep it from ever taking the foreground, which
 would otherwise interrupt the reader mid-sentence.
 
-The strokes follow §2.2's reasoning: black paired with white so one of the two contrasts
-whatever is underneath, both entirely outside the word. `--highlight-metrics` checks the
-shape, since a wrong region is invisible and presents as a mark that is merely slightly off.
+Every stroke is a white core on a black backing, at the selection overlay's guide widths —
+11px overall, a 5px core, 3px of black either side. White *sandwiched* in black rather than
+merely paired with it is what keeps it readable over light content, dark content and a
+photograph alike; a two-band border has an edge that vanishes against one or the other.
+
+The box is held 5px clear of the word rather than drawn against it. Touching the glyphs,
+the stroke reads as part of the letterform — a descender or an accent becomes ambiguous at
+exactly the moment the reader is looking hardest — and the recogniser's boxes are tight to
+the ink rather than to the type, so they have no slack of their own to give.
+
+The lines stop at the box rather than crossing it, so nothing is ever drawn over the word,
+and the box stays legible where the three strokes meet.
+
+`--highlight-metrics` checks the shape, since a region is invisible either way: it asserts
+not only that the word is excluded but that ordinary empty desktop is too, and that all three
+strokes are actually present.
 
 Two things have to be true for any of it to appear, and each fails silently on its own.
 `IncludeWordBoundaryMetadata` must be set on the synthesiser or no track is published at

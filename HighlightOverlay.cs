@@ -3,34 +3,47 @@ namespace SelectAndRead;
 /// <summary>
 /// Marks the word being read aloud, on top of the live desktop (SPEC 16.4).
 ///
-/// It is a window shaped like a rectangular ring: the middle is cut out with SetWindowRgn,
-/// so the window has no pixels whatsoever over the word it surrounds. That is what makes it
-/// safe on top of a live screen - there is nothing to see through, nothing to hit-test, and
-/// nothing that can obscure the text a user with poor vision is trying to follow. It is also
-/// why this is a separate class from SelectionOverlay, which is opaque, modal and paints an
-/// entire freeze frame.
+/// A box around the word, plus screen-spanning crosshair lines centred on it - the same two
+/// cues SelectionOverlay gives the cursor, for the same reason. At low acuity a box a few
+/// hundred pixels away is not findable by scanning; lines that run the width and height of
+/// the screen are, and they lead the eye to the box.
+///
+/// The window covers the screen but is shaped with SetWindowRgn down to just those strokes,
+/// so it has no pixels anywhere else - most importantly none over the word itself, and none
+/// over the rest of the desktop. That is stronger than painting transparently: there is
+/// nothing to see through, nothing to hit-test, and click-through comes for free because the
+/// removed area is not part of the window at all.
 ///
 /// The coordinate discipline is SelectionOverlay's, for the same reason (SPEC 4.1): the
 /// window is placed with SetWindowPos in raw physical pixels and never autoscaled, so the
-/// rectangle handed to <see cref="Show"/> is in the same space as the screen, the freeze
-/// frame and the crop.
+/// rectangle handed to <see cref="Show"/>, the client coordinates it is painted in, and the
+/// screen are all the same numbers.
 /// </summary>
 internal sealed class HighlightOverlay : Form
 {
     /// <summary>
-    /// Thickness of each of the two strokes. As in SelectionOverlay, every stroke is black
-    /// paired with white so one of the two contrasts whatever is underneath, and both sit
-    /// entirely outside the word - a mark that covered the text it was pointing at would
-    /// defeat the purpose. Hardcoded for the same reason the selection border is: there is no
-    /// user of this app who wants it thinner.
+    /// Every stroke is a white core on a black backing, so one of the two contrasts whatever
+    /// is underneath - white sandwiched in black rather than merely paired with it, which is
+    /// what keeps it readable over light content, dark content and a photograph alike. These
+    /// are SelectionOverlay's guide widths, because this is the same mark for the same eyes.
     /// </summary>
-    private const int OuterBand = 6;
-    private const int InnerBand = 6;
+    private const int Stroke = 11;
+    private const int Core = 5;
 
-    /// <summary>Total clearance between the word and the outside of the window.</summary>
-    private const int Clearance = OuterBand + InnerBand;
+    /// <summary>Black either side of the core. Derived so the core stays centred.</summary>
+    private const int Backing = (Stroke - Core) / 2;
+
+    /// <summary>
+    /// Clear space between the word and the box. Without it the stroke sits against the
+    /// glyphs, and a descender or an accent reads as part of the mark rather than as part of
+    /// the letter - at which point the mark is interfering with the very thing it is pointing
+    /// at. It also gives the recogniser's own box a little slack, since the bounds it reports
+    /// are tight to the ink rather than to the type.
+    /// </summary>
+    private const int Gap = 5;
 
     private Rectangle _word = Rectangle.Empty;
+    private Size _screen;
 
     internal HighlightOverlay()
     {
@@ -43,10 +56,10 @@ internal sealed class HighlightOverlay : Form
         BackColor = Color.Black;
         Text = "Select and Read";
 
-        SetStyle(
-            ControlStyles.UserPaint |
-            ControlStyles.AllPaintingInWmPaint |
-            ControlStyles.OptimizedDoubleBuffer, true);
+        // Deliberately no OptimizedDoubleBuffer. The window is screen-sized, so a back buffer
+        // would be tens of megabytes reallocated on every word, to composite the few thousand
+        // pixels the region actually admits. The region is what keeps the painting cheap.
+        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
 
         // Built here, on the UI thread, and not left until the first word arrives.
         // InvokeRequired answers false for a control with no handle yet, so a first call
@@ -65,8 +78,8 @@ internal sealed class HighlightOverlay : Form
 
             var cp = base.CreateParams;
 
-            // NOACTIVATE is the load-bearing one: without it, showing the highlight steals
-            // focus from whatever the user is reading, and on a first show it would take the
+            // NOACTIVATE is the load-bearing one: without it, showing the mark steals focus
+            // from whatever the user is reading, and on a first show it would take the
             // foreground away mid-sentence.
             cp.ExStyle |= WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
             return cp;
@@ -74,14 +87,14 @@ internal sealed class HighlightOverlay : Form
     }
 
     /// <summary>
-    /// Keeps the window from ever taking the foreground, which the shaped, disabled window
-    /// would otherwise still do the first time it is shown.
+    /// Keeps the window from ever taking the foreground, which the shaped window would
+    /// otherwise still do the first time it is shown.
     /// </summary>
     protected override bool ShowWithoutActivation => true;
 
     /// <summary>
-    /// Surrounds the given word, in screen pixels. Safe to call from any thread and in any
-    /// order relative to <see cref="Clear"/>; a null or empty rectangle hides the mark.
+    /// Marks the given word, in screen pixels. Safe to call from any thread; a null or empty
+    /// rectangle hides the mark.
     /// </summary>
     internal void Show(Rectangle? word)
     {
@@ -99,12 +112,14 @@ internal sealed class HighlightOverlay : Form
 
         _word = rect;
 
-        var outer = Rectangle.Inflate(rect, Clearance, Clearance);
+        // Re-read rather than cached: a resolution change between readings would otherwise
+        // leave the crosshair stopping short of, or running past, the new screen.
+        _screen = ScreenCapture.GetScreenSize();
 
         // Placed before being shown and again after, as SelectionOverlay does for the same
         // reason: making a Form visible applies its own cached bounds, which would put the
         // first word's mark somewhere else for a frame.
-        Place(outer);
+        Place();
 
         // WinForms has to agree that the window is visible. Showing it with SWP_SHOWWINDOW
         // alone leaves Control.Visible false, and Invalidate on a control WinForms believes
@@ -112,18 +127,14 @@ internal sealed class HighlightOverlay : Form
         // permanently unpainted window.
         if (!Visible) Visible = true;
 
-        Place(outer);
-        ApplyRing(outer.Size);
+        Place();
+        ApplyShape();
 
         Invalidate();
 
         // Painted now rather than whenever the queue drains: the mark is chasing speech.
         Update();
     }
-
-    private void Place(Rectangle outer) => Native.SetWindowPos(
-        Handle, IntPtr.Zero, outer.X, outer.Y, outer.Width, outer.Height,
-        Native.SWP_NOZORDER | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
 
     internal void Clear()
     {
@@ -137,30 +148,77 @@ internal sealed class HighlightOverlay : Form
         Visible = false;
     }
 
+    private void Place() => Native.SetWindowPos(
+        Handle, IntPtr.Zero, 0, 0, _screen.Width, _screen.Height,
+        Native.SWP_NOZORDER | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+
+    /// <summary>The clear space the box is held off the word by, and the hole in the shape.</summary>
+    private Rectangle Clearance => Rectangle.Inflate(_word, Gap, Gap);
+
+    /// <summary>The box's outer edge - where the crosshair lines stop.</summary>
+    private Rectangle Surround => Rectangle.Inflate(_word, Gap + Stroke, Gap + Stroke);
+
+    private Point Centre => new(_word.X + _word.Width / 2, _word.Y + _word.Height / 2);
+
     /// <summary>
-    /// Cuts the word-sized hole out of the window. The region is in client coordinates, and
-    /// the window owns it once SetWindowRgn succeeds - hence the delete only on failure.
+    /// Cuts the window down to the box and the two lines: a ring around the word, plus a
+    /// full-width and a full-height band that both stop at the box rather than crossing it.
+    ///
+    /// Everything else is removed, so the window covers the screen without covering anything
+    /// on it. The window owns the region once SetWindowRgn succeeds, hence the delete only on
+    /// failure.
     /// </summary>
-    private void ApplyRing(Size outer)
+    private void ApplyShape()
     {
-        var ring = Native.CreateRectRgn(0, 0, outer.Width, outer.Height);
-        var hole = Native.CreateRectRgn(
-            Clearance, Clearance, outer.Width - Clearance, outer.Height - Clearance);
+        var surround = Surround;
+        var centre = Centre;
+
+        var shape = RectRegion(surround);
+        var hole = RectRegion(Clearance);
+        var box = RectRegion(surround);
 
         try
         {
-            Native.CombineRgn(ring, ring, hole, Native.RGN_DIFF);
+            // The box: a ring around the clearance, so neither the word nor the space held
+            // clear around it is part of the window.
+            Native.CombineRgn(shape, shape, hole, Native.RGN_DIFF);
 
-            if (Native.SetWindowRgn(Handle, ring, bRedraw: true) == 0)
+            AddBand(shape, box, new Rectangle(
+                0, centre.Y - Stroke / 2, _screen.Width, Stroke));
+
+            AddBand(shape, box, new Rectangle(
+                centre.X - Stroke / 2, 0, Stroke, _screen.Height));
+
+            if (Native.SetWindowRgn(Handle, shape, bRedraw: true) == 0)
             {
-                Native.DeleteObject(ring);
+                Native.DeleteObject(shape);
             }
         }
         finally
         {
             Native.DeleteObject(hole);
+            Native.DeleteObject(box);
         }
     }
+
+    /// <summary>Adds one crosshair band, minus the box, to the shape being built.</summary>
+    private static void AddBand(IntPtr shape, IntPtr box, Rectangle band)
+    {
+        var region = RectRegion(band);
+
+        try
+        {
+            Native.CombineRgn(region, region, box, Native.RGN_DIFF);
+            Native.CombineRgn(shape, shape, region, Native.RGN_OR);
+        }
+        finally
+        {
+            Native.DeleteObject(region);
+        }
+    }
+
+    private static IntPtr RectRegion(Rectangle r) =>
+        Native.CreateRectRgn(r.Left, r.Top, r.Right, r.Bottom);
 
     protected override void OnPaintBackground(PaintEventArgs e)
     {
@@ -168,20 +226,34 @@ internal sealed class HighlightOverlay : Form
     }
 
     /// <summary>
-    /// Two rectangles, not four bands each. The window region has already removed the middle,
-    /// so a fill that covers the word is clipped away before it reaches the screen - which
-    /// makes the black backing one rectangle and the white core one more.
+    /// Black everywhere, then the white cores laid back over it. Nothing here masks the word
+    /// or the desktop: the window region has already removed both, so a fill that covers them
+    /// is clipped away before it reaches the screen. That is what lets the backing be one
+    /// Clear and each core one or two rectangles, instead of bands counted out individually.
     /// </summary>
     protected override void OnPaint(PaintEventArgs e)
     {
         if (_word.IsEmpty) return;
 
-        e.Graphics.Clear(Color.Black);
+        var g = e.Graphics;
+        g.Clear(Color.Black);
 
-        using var core = new SolidBrush(Color.White);
-        e.Graphics.FillRectangle(
-            core,
-            OuterBand, OuterBand,
-            _word.Width + InnerBand * 2, _word.Height + InnerBand * 2);
+        using var white = new SolidBrush(Color.White);
+        using var black = new SolidBrush(Color.Black);
+
+        // The line cores, held out of the box so the two marks stay legible where they meet.
+        var clip = g.Save();
+        g.ExcludeClip(Surround);
+        g.FillRectangle(white, 0, Centre.Y - Core / 2, _screen.Width, Core);
+        g.FillRectangle(white, Centre.X - Core / 2, 0, Core, _screen.Height);
+        g.Restore(clip);
+
+        // The box core: white out to the core's outer edge, then black back over the inner
+        // backing band. The word and its clearance are outside the region, so the second fill
+        // only lands on the innermost band of the ring.
+        g.FillRectangle(white, Rectangle.Inflate(
+            _word, Gap + Backing + Core, Gap + Backing + Core));
+        g.FillRectangle(black, Rectangle.Inflate(
+            _word, Gap + Backing, Gap + Backing));
     }
 }

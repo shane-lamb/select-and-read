@@ -701,14 +701,14 @@ internal static class Program
     }
 
     /// <summary>
-    /// Reports where the word mark actually put itself and what shape it actually is.
+    /// Reports what shape the word mark actually ended up, and where.
     ///
-    /// The mark's whole claim is that it surrounds a word without covering it, and that claim
-    /// rests on a window region - which is invisible, so a wrong one looks like a mark that
-    /// is merely slightly off rather than like a bug. This asks Windows what it ended up
-    /// with: the window rectangle it gave the mark, and whether the middle really is not part
-    /// of the window. The exit code makes it a check rather than a readout, as with
-    /// --settings-metrics.
+    /// The mark now covers the whole screen and is cut back to a box and two crosshair lines,
+    /// which changes what can go wrong. A region that fails to apply no longer means a mark
+    /// that covers one word - it means an opaque black rectangle over the entire desktop, and
+    /// the app has no window a user could close. Regions are invisible either way, so this
+    /// asks Windows what it has: not just that the word is excluded, but that ordinary empty
+    /// desktop is too, and that each of the three strokes really is present.
     ///
     /// Runs under `prlctl exec` in session 0: the window is created and shaped there even
     /// though nothing can be drawn, and it is the geometry that is being asked about.
@@ -718,8 +718,12 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // An arbitrary but asymmetric word box, so a transposed coordinate cannot pass.
+        var screen = ScreenCapture.GetScreenSize();
+
+        // An arbitrary but asymmetric word box, well away from both screen edges and from the
+        // centre, so a transposed or forgotten coordinate cannot pass by coincidence.
         var word = new Rectangle(400, 250, 120, 30);
+        var centre = new Point(word.X + word.Width / 2, word.Y + word.Height / 2);
 
         using var overlay = new HighlightOverlay();
         overlay.Show(word);
@@ -733,6 +737,7 @@ internal static class Program
         var region = Native.CreateRectRgn(0, 0, 0, 0);
         var shaped = Native.GetWindowRgn(overlay.Handle, region) != 0;
 
+        Console.WriteLine($"screen   : {screen.Width}x{screen.Height}");
         Console.WriteLine($"word     : {word.Width}x{word.Height} at {word.X},{word.Y}");
         Console.WriteLine($"window   : {window.Width}x{window.Height} at {window.X},{window.Y}");
         Console.WriteLine($"shaped   : {shaped}");
@@ -740,40 +745,58 @@ internal static class Program
         if (!shaped)
         {
             Native.DeleteObject(region);
-            Console.Error.WriteLine("The mark has no window region, so it would cover the word.");
+            Console.Error.WriteLine(
+                "The mark has no window region, so it is covering the entire screen.");
             return 1;
         }
 
-        Native.GetRgnBox(region, out var box);
-        Console.WriteLine(
-            $"region   : {box.Right - box.Left}x{box.Bottom - box.Top} at {box.Left},{box.Top}");
+        // Window coordinates, which for a screen-sized window at the origin are screen
+        // coordinates (SPEC 4.1).
+        var onWord = Native.PtInRegion(region, centre.X, centre.Y);
+        var intoWord = Native.PtInRegion(region, word.Left + 1, centre.Y);
+        var onAcross = Native.PtInRegion(region, 1, centre.Y);
+        var onDown = Native.PtInRegion(region, centre.X, 1);
+        var onEmpty = Native.PtInRegion(region, centre.X + 300, centre.Y + 300);
 
-        // Region coordinates are relative to the window, so the word's centre sits at the
-        // centre of the window by construction.
-        var centre = Native.PtInRegion(region, window.Width / 2, window.Height / 2);
-        var edge = Native.PtInRegion(region, 1, window.Height / 2);
+        // Walked rather than sampled at a known offset, so this reports what the gap and the
+        // stroke actually came out as instead of confirming the number it was told. Walked
+        // off the centre line too: on the centre the crosshair band adjoins the box, and the
+        // stroke would be measured as running on into it.
+        var (gap, stroke) = Measure(region, word.Left - 1, word.Top + 2);
         Native.DeleteObject(region);
 
-        Console.WriteLine($"centre in: {centre}");
-        Console.WriteLine($"edge in  : {edge}");
+        Console.WriteLine($"gap             : {gap}px");
+        Console.WriteLine($"stroke          : {stroke}px");
+        Console.WriteLine($"covers word     : {onWord}");
+        Console.WriteLine($"line into word  : {intoWord}");
+        Console.WriteLine($"line across     : {onAcross}");
+        Console.WriteLine($"line down       : {onDown}");
+        Console.WriteLine($"covers desktop  : {onEmpty}");
 
-        // The window has to sit outside the word on every side, or the mark would overlap the
-        // text it is pointing at.
-        var surrounds = window.Contains(word) && window != word;
+        var fullScreen = window == new Rectangle(Point.Empty, screen);
+        Console.WriteLine($"full screen     : {fullScreen}");
 
-        Console.WriteLine($"surrounds: {surrounds}");
+        // The word must be clear, from the box and from either line; the desktop must be
+        // clear everywhere the mark is not; and all three strokes must actually be there.
+        if (onWord || intoWord || onEmpty) return 1;
+        return fullScreen && gap > 0 && stroke > 0 && onAcross && onDown ? 0 : 1;
+    }
 
-        // Centred: equal clearance on both axes, which is what makes the mark read as a box
-        // around the word rather than as an offset smear.
-        var centred = word.X - window.X == window.Right - word.Right
-                      && word.Y - window.Y == window.Bottom - word.Bottom;
+    /// <summary>
+    /// Walks left from just outside the word, counting the clear pixels before the box and
+    /// then the width of the box's stroke.
+    /// </summary>
+    private static (int Gap, int Stroke) Measure(IntPtr region, int fromX, int y)
+    {
+        var x = fromX;
 
-        Console.WriteLine($"centred  : {centred}");
+        var gap = 0;
+        while (x > 0 && !Native.PtInRegion(region, x, y)) { gap++; x--; }
 
-        // The two failures that matter: a mark that covers its word, and one in the wrong
-        // place. A solid centre means the region never got cut.
-        if (centre) return 1;
-        return surrounds && centred && edge ? 0 : 1;
+        var stroke = 0;
+        while (x > 0 && Native.PtInRegion(region, x, y)) { stroke++; x--; }
+
+        return (gap, stroke);
     }
 
     private static Panel? FindScrollPanel(Control parent)
