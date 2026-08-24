@@ -59,6 +59,25 @@ through it. Without it `vmrun` hangs for about four minutes and then reports
 diagnostic. A VM carried over from another hypervisor will not have it. Install it from
 Fusion's **Virtual Machine > Install VMware Tools**, run `setup.exe` from the mounted CD,
 and reboot.
+**1b. `Register-ScheduledTask` can queue forever without ever dispatching.** The task
+reports `LastTaskResult 0` and `Status: Queued`, nothing runs, and no error appears anywhere
+including the TaskScheduler event log. `deploy.sh --run` fails the same way, so this looks
+exactly like the app refusing to start. Creating the task with `schtasks` and `/it` instead
+dispatches immediately:
+
+```bash
+prlctl exec "Windows 11" cmd /c 'schtasks /create /tn SarVis /tr "C:\sar-test\run-highlight.cmd" /sc once /st 00:00 /ru shane /it /f'
+prlctl exec "Windows 11" cmd /c 'schtasks /run /tn SarVis'
+```
+
+Give the task a `.cmd` wrapper rather than a quoted powershell command line: quotes passed
+through `prlctl exec` and then through the task's own argument parsing arrive mangled, and
+the task then runs and does nothing at all.
+
+**2. `prlctl capture` returns solid black while a fullscreen topmost GDI window is up.**
+It cannot photograph the overlay. To see what the overlay actually looks like, run
+`SelectAndRead.exe --freeze-to shot.png` from a *second* process while the overlay is
+displayed — the app's own capture path works fine where the VM's framebuffer grab does not.
 
 **The guest must be started from the Fusion UI, logged in, and unlocked.** Not merely
 powered on: `-interactive` needs a live console session to target, and a lock screen makes

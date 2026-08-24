@@ -86,7 +86,10 @@ interactive loop, and are the fastest way to diagnose almost anything:
 | `--capture-to <png>` | Overlay + crop; reports *why* a selection was cancelled |
 | `--freeze-to <png>` | Raw capture, no overlay — separates "capture is wrong" from "overlay is wrong" |
 | `--read-file <png>` | Cloud reading engine against a fixture; reports latency and token usage |
+| `--markers ["<text>"] [--voice <n>] [--play]` | Which voices emit word-boundary cues, and what they contain |
+| `--read-local <png> [--overlay <x>,<y>]` | Whole local pipeline; logs every word marked, and can draw the real mark |
 | `--settings-metrics` | Settings dialog size, scrollability and whether Save is reachable |
+| `--highlight-metrics` | The word mark's window rect and whether its region really excludes the word |
 
 `--ocr-file` also reports the measured glyph height and chosen upscale factor on stderr,
 which is the first thing to look at for any "the OCR read it wrong" report. `--read-file` is
@@ -236,6 +239,35 @@ load-bearing: `AppId` is a fixed GUID and must never change, or a new version in
 *beside* the old one instead of over it; and the `[Code]` `taskkill` is not laziness in
 place of Restart Manager — RM closes apps by posting `WM_CLOSE` to top-level windows, and a
 tray app has none, so it cannot close the app and demands a reboot instead.
+
+**Word boundaries do not come from `SpeechSynthesisStream.Markers`** (SPEC §16.1). That
+list is for SSML `<mark>` bookmarks and is empty for ordinary text however the options are
+set — the mechanism is a timed metadata track of `SpeechCue`s on the `MediaPlaybackItem`,
+enabled by `Options.IncludeWordBoundaryMetadata`. A cue's `StartPositionInInput` is a
+character offset into the submitted string, and **using those offsets rather than counting
+cues is what makes the mark correct**: `$12.50` produces five cues and `2026` three, all
+pointing at the same input characters, so an ordinal count desynchronises permanently at the
+first such token. `EndPositionInInput` is inclusive.
+
+**Cleaning destroys character offsets, so `TextCleaner` records them as it goes**
+(SPEC §16.2). Dropped lines, collapsed whitespace and de-hyphenation all move text relative
+to its source, so `CleanWords` emits a span table alongside the string. Keep the two `Clean`
+entry points sharing one implementation — the string overload is the word one with a single
+word per line — or the spoken text starts depending on whether anything asked for spans.
+`OcrService` therefore cleans recognised *words*, not `OcrLine.Text`; the fixtures are what
+hold "line text == its words joined by spaces" to be true, so a fixture diff there is this.
+
+**Three separate things each silently switch the mark off, and every other check still
+passes** (SPEC §16.4) — which is why `--read-local` exists. `IncludeWordBoundaryMetadata`
+must be set on the synthesiser or no track is published. The overlay's handle must be created
+on the UI thread, because `InvokeRequired` is false for a control with no handle yet, so the
+first call from the speech timer would build the window on a pump-less thread. And `Visible`
+must go through WinForms rather than `SWP_SHOWWINDOW` alone, or `Invalidate` no-ops on a
+window WinForms thinks is hidden.
+
+**Tracking is stopped by `Stop` and never by `Pause`** (SPEC §16.4), which is the same
+distinction as §7.5. Position is read from `MediaPlaybackSession.Position` rather than from
+elapsed time, so a paused reading freezes its own mark with no extra code.
 
 **Never enable trimming** on publish — it breaks WinForms reflection over designer types.
 

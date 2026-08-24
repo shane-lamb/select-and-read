@@ -585,7 +585,7 @@ code signing is out of scope for v1.
 
 ### 12.2 Debug CLI modes
 
-`Program.cs` supports six non-interactive modes so the risky logic can be exercised
+`Program.cs` supports seven non-interactive modes so the risky logic can be exercised
 without the full interactive loop:
 
 | Mode | Behaviour |
@@ -593,6 +593,8 @@ without the full interactive loop:
 | `--ocr-file <png>` | Print cleaned OCR text for an image to stdout |
 | `--read-file <png>` | Read an image via the cloud engine; report latency and token usage |
 | `--speak "<text>"` | Speak the text and exit |
+| `--read-local <png> [--overlay <x>,<y>]` | Run the whole local pipeline; log every word marked, and optionally draw the real mark on screen |
+| `--markers ["<text>"] [--play]` | Per voice, dump the word-boundary markers the synthesiser emits; non-zero if no voice emits any. `--play` also tracks playback position against them |
 | `--capture-to <png>` | Run the overlay, write the crop to disk, exit |
 | `--freeze-to <png>` | Save the raw freeze frame with no overlay involved |
 | `--settings-metrics` | Report dialog size, scrollability and Save reachability; non-zero if unusable |
@@ -904,4 +906,133 @@ saved-password stores offer, and the right level for a tray utility.
 | What does a cloud reading actually cost? | **Open.** Estimated at ~$0.017 (§14.1) from inferred image-token counts. `--read-file` prints real `usage`; replace the estimate with measurement. |
 | Does `MediaStreamSource` stream PCM cleanly on ARM64? | **Open.** The highest-risk untested piece of §14.3; underruns or clicks would show up here first. |
 | Does resuming a paused `MediaStreamSource` pick up cleanly mid-stream? | **Open.** Pausing a live source is the one part of §2.5 with no local equivalent to fall back on. A gap, a click or a dropped chunk on resume shows up here; the local engine's seekable stream is not at risk in the same way. |
+| Does the word mark look right on screen? | **Was resolved for the box-only mark**, photographed during a live reading of `windows-ui-text.png`. **Reopened by the crosshair lines (§16.4), which are unphotographed:** the Parallels licence on the test VM has expired, so nothing Windows-side can currently be run. `tests/vm/drive-highlight.ps1` reproduces the shot once a VM is available. |
+| Does the boundary track ever take longer than 250 ms to publish? | **Open.** Measured as immediate on the fixtures, but the wait is a guess at the tail. If it is routinely exceeded the mark silently stops appearing rather than delaying audio, which is the right failure but a quiet one. |
+| Do Windows' downloadable natural voices emit boundary cues? | **Open.** All five voices on the test VM do (§16.1), but they are the OneCore set; no *Natural* voice is installed there, and §7.2 already treats their availability as a runtime probe. |
 | Does a cloud reading survive being paused past the 60 s receive timeout? | **Open.** It should: the timeout caps silence *from the server*, and the socket finishes independently of playback, so a pause should not reach it. Untested (§13.4). |
+
+---
+
+## 16. Reading position on screen
+
+Each word is marked on screen as it is spoken, so a reader can see where the voice has got
+to. For the users this app is for, that is not decoration: it is the difference between
+listening to a page and following one.
+
+It is on by default and switchable in Settings (`HighlightWhileReading`). Unlike the
+selection overlay's dimensions, this one is a real preference rather than a fixed choice —
+the mark is useful precisely because it moves, and movement in the corner of the eye is the
+kind of thing that suits some readers and not others.
+
+### 16.1 Word boundaries from the synthesiser
+
+The WinRT synthesiser has no `SpeakProgress` event. It publishes word boundaries as
+`SpeechCue` objects on a **timed metadata track** of the `MediaPlaybackItem` built from the
+synthesised stream, enabled by `SpeechSynthesizer.Options.IncludeWordBoundaryMetadata`.
+
+`SpeechSynthesisStream.Markers` is **not** that mechanism and is a dead end: it carries SSML
+`<mark>` bookmarks and comes back empty for ordinary text however the options are set. The
+distinction cost a full probe cycle to find, which is why `--markers` reports both.
+
+Measured on Windows 11 ARM64, all five installed voices emit the track, as two tracks
+distinguished only by `Label` — `SpeechWord` and `SpeechSentence`.
+
+Each cue carries the word's text *and* `StartPositionInInput`/`EndPositionInInput`, which are
+character offsets into the exact string handed to the synthesiser. **The offsets are what
+make this work, and an ordinal count of spoken words would not.** One written token can
+produce several spoken ones: `$12.50` measurably produces five cues and `2026` three, all
+pointing back at the same input characters. Counting words would desynchronise permanently at
+the first such token; offsets simply hold the mark still while the token is read out. Note
+`EndPositionInInput` is the index of the last character, not one past it.
+
+Cue `Duration` is always zero, so a word owns the mark until the next cue begins.
+
+### 16.2 Tying boundaries back to the screen
+
+An offset into the spoken text is only useful with a map from that text back to the screen,
+and cleaning (§6) destroys the obvious one: lines are dropped, whitespace is collapsed, and
+hyphenated words are fused, so nothing about the output string says where a character came
+from. `TextCleaner` therefore records a **span table** as it rewrites — `(start, length,
+box)` per word — which is the only point at which the correspondence is still known.
+
+Two consequences are load-bearing:
+
+- `OcrService` cleans the recognised **words**, not the recognised line strings. The engine
+  builds `OcrLine.Text` by joining its words with single spaces, so the spoken result is
+  unchanged — and the fixtures in `tests/fixtures` are what hold that to be true.
+- Word boxes come from whichever pass produced them, so a 4x pass reports them four times too
+  large and four times too far from the origin. They are divided back down before leaving
+  `OcrService`, so nothing downstream needs to know a pass ran enlarged.
+
+The crop's own origin is added by `TrayAppContext`, which is a plain addition and not a
+conversion — screen, freeze frame and crop are one coordinate space (§4.1).
+
+### 16.3 The cloud engine has no mark
+
+`RealtimeReadingEngine` is handed finished audio and a transcript that is the model's own
+reading rather than the recognised text, with no per-word timing and no knowledge of where
+anything was on the page. There is nothing it could point at, so it raises no highlight and
+readings through it are unmarked. This is a property of the wire format, not a gap to close
+later.
+
+### 16.4 The mark itself
+
+The mark is a box around the word plus screen-spanning crosshair lines centred on it —
+the same two cues the selection overlay gives the cursor (§2.2), for the same reason. A box
+alone is only findable if you already know roughly where it is; at low acuity, hunting for
+one on a 4K screen costs more than the mark saves. Lines that run the full width and height
+lead the eye to it from anywhere, and they cost nothing extra to draw.
+
+The window covers the screen and is then cut back with `SetWindowRgn` to just those strokes,
+so it has **no pixels anywhere else** — none over the word, and none over the rest of the
+desktop. That is stronger than drawing transparently, and it makes click-through free, since
+the removed area is not part of the window at all. It also relocates the worst failure: a
+region that fails to apply no longer means a mark covering one word, it means an opaque
+rectangle over the whole screen with no window a user could close.
+
+`WS_EX_NOACTIVATE` and `ShowWithoutActivation` keep it from ever taking the foreground, which
+would otherwise interrupt the reader mid-sentence.
+
+Every stroke is a white core on a black backing, at the selection overlay's guide widths —
+11px overall, a 5px core, 3px of black either side. White *sandwiched* in black rather than
+merely paired with it is what keeps it readable over light content, dark content and a
+photograph alike; a two-band border has an edge that vanishes against one or the other.
+
+The box is held 5px clear of the word rather than drawn against it. Touching the glyphs,
+the stroke reads as part of the letterform — a descender or an accent becomes ambiguous at
+exactly the moment the reader is looking hardest — and the recogniser's boxes are tight to
+the ink rather than to the type, so they have no slack of their own to give.
+
+The lines stop at the box rather than crossing it, so nothing is ever drawn over the word,
+and the box stays legible where the three strokes meet.
+
+`--highlight-metrics` checks the shape, since a region is invisible either way: it asserts
+not only that the word is excluded but that ordinary empty desktop is too, and that all three
+strokes are actually present.
+
+Two things have to be true for any of it to appear, and each fails silently on its own.
+`IncludeWordBoundaryMetadata` must be set on the synthesiser or no track is published at
+all; and the mark's window handle must be created on the UI thread, because `InvokeRequired`
+answers false for a control that has no handle yet, so the first call from the speech timer
+would otherwise build the window on a pump-less thread where it can never paint. `Visible`
+must also be set through WinForms rather than with `SWP_SHOWWINDOW` alone, or `Invalidate`
+is a no-op on a window WinForms believes is hidden and the mark is placed, shaped and never
+painted. `--read-local` exists because every other check passes while these are wrong.
+
+Position is read from `MediaPlaybackSession.Position` on a 50 ms timer rather than from
+elapsed time. **That is what makes pausing free**: a paused player stops advancing, so the
+mark simply stays on the word the reading stopped at, with no interaction with §7.5's rule
+that `Pause` tears nothing down. Tracking is stopped by `Stop` and never by `Pause` — a
+paused reading is still live, and its mark has to stay on screen showing where it will
+resume.
+
+Measured lag from a cue's own start time to the mark moving: 2–58 ms, mean 30 ms, against
+words lasting 150–400 ms.
+
+The boundary track is waited for only briefly (250 ms) before speaking without one. The mark
+is an addition, and delaying audio for it would trade the app's core promise for a secondary
+one (§7.4). A voice that publishes no boundaries reads normally, unmarked.
+
+The mark is **not** suppressed when the screen behind it changes. Detecting that would mean
+holding the freeze frame alive for the whole reading, which the pipeline goes out of its way
+not to do, and a reader who has scrolled the page away has stopped following the mark anyway.

@@ -44,6 +44,56 @@ internal static class Native
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    // --- Window regions ---------------------------------------------------------
+    // Used to cut the middle out of the highlight window, so the window is only its own
+    // border and has no pixels at all over the word it marks (SPEC 16.4). Shaping the window
+    // rather than painting transparently is what makes it click-through for free: the
+    // removed area is not part of the window, so it cannot be hit-tested or drawn over.
+    internal const int RGN_OR = 2;
+    internal const int RGN_DIFF = 4;
+
+    [DllImport("gdi32.dll")]
+    internal static extern IntPtr CreateRectRgn(int x1, int y1, int x2, int y2);
+
+    [DllImport("gdi32.dll")]
+    internal static extern int CombineRgn(IntPtr dest, IntPtr src1, IntPtr src2, int mode);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteObject(IntPtr handle);
+
+    /// <summary>
+    /// The window takes ownership of the region on success, so the handle must not be
+    /// deleted afterwards - only one that was never handed over.
+    /// </summary>
+    [DllImport("user32.dll")]
+    internal static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+
+    // Reading the shape back, for --highlight-metrics. GetWindowRgn copies into a region
+    // the caller already owns rather than returning one, hence the empty region first.
+    [DllImport("user32.dll")]
+    internal static extern int GetWindowRgn(IntPtr hWnd, IntPtr hRgn);
+
+    [DllImport("gdi32.dll")]
+    internal static extern int GetRgnBox(IntPtr hRgn, out RECT lprc);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PtInRegion(IntPtr hRgn, int x, int y);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RECT
+    {
+        internal int Left;
+        internal int Top;
+        internal int Right;
+        internal int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
     // --- Global hotkeys ---------------------------------------------------------
     internal const uint MOD_ALT = 0x0001;
     internal const uint MOD_CONTROL = 0x0002;

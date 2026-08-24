@@ -72,11 +72,19 @@ internal sealed class OcrService
     /// scale it picked.</summary>
     internal sealed record Diagnostics(double MedianGlyphHeight, int Scale, int Words);
 
+    /// <summary>
+    /// Cleaned text plus, for each word in it, the box it was recognised in - already
+    /// divided back down to crop pixels, so the caller never has to know a pass ran enlarged
+    /// (SPEC 16.2).
+    /// </summary>
+    internal sealed record Recognition(
+        string Text, IReadOnlyList<TextCleaner.Span> Spans, Diagnostics Info);
+
     /// <summary>Recognises the crop and returns speech-ready text (may be empty).</summary>
     internal async Task<string> RecognizeAsync(Bitmap crop, bool upscale) =>
         (await RecognizeDetailedAsync(crop, upscale)).Text;
 
-    internal async Task<(string Text, Diagnostics Info)> RecognizeDetailedAsync(Bitmap crop, bool upscale)
+    internal async Task<Recognition> RecognizeDetailedAsync(Bitmap crop, bool upscale)
     {
         // A crop below the engine's floor cannot be recognised at all, so it must be
         // enlarged before anything else can be measured.
@@ -85,7 +93,7 @@ internal sealed class OcrService
         {
             using var enlarged = Upscale(crop, minimum);
             var forced = await RunAsync(enlarged);
-            return (Clean(forced), new Diagnostics(MedianGlyphHeight(forced), minimum, WordCount(forced)));
+            return Recognise(forced, MedianGlyphHeight(forced), minimum);
         }
 
         // Pass one, at native scale. Besides being the answer for text that is already
@@ -93,14 +101,21 @@ internal sealed class OcrService
         var native = await RunAsync(crop);
         var median = MedianGlyphHeight(native);
 
-        if (!upscale) return (Clean(native), new Diagnostics(median, 1, WordCount(native)));
+        if (!upscale) return Recognise(native, median, 1);
 
         var factor = ChooseScale(native, crop.Width, crop.Height);
-        if (factor <= 1) return (Clean(native), new Diagnostics(median, 1, WordCount(native)));
+        if (factor <= 1) return Recognise(native, median, 1);
 
         using var scaled = Upscale(crop, factor);
         var result = await RunAsync(scaled);
-        return (Clean(result), new Diagnostics(median, factor, WordCount(result)));
+        return Recognise(result, median, factor);
+    }
+
+    private static Recognition Recognise(OcrResult result, double median, int scale)
+    {
+        var cleaned = Clean(result, scale);
+        return new Recognition(
+            cleaned.Text, cleaned.Spans, new Diagnostics(median, scale, WordCount(result)));
     }
 
     private static int WordCount(OcrResult result) => result.Lines.Sum(l => l.Words.Count);
@@ -117,8 +132,29 @@ internal sealed class OcrService
         return heights.Count == 0 ? 0 : heights[heights.Count / 2];
     }
 
-    private static string Clean(OcrResult result) =>
-        TextCleaner.Clean(result.Lines.Select(l => l.Text));
+    /// <summary>
+    /// Cleans the recognised words rather than the recognised line strings, which is what
+    /// keeps each word's box attached to the text it produced. The engine builds OcrLine.Text
+    /// by joining its words with single spaces, so the spoken result is unchanged - the
+    /// fixtures in tests/fixtures are what hold that to be true.
+    /// </summary>
+    private static TextCleaner.Result Clean(OcrResult result, int scale) =>
+        TextCleaner.CleanWords(result.Lines.Select(line => (IReadOnlyList<TextCleaner.Word>)
+            line.Words
+                .Select(word => new TextCleaner.Word(word.Text, Descale(word.BoundingRect, scale)))
+                .ToList()));
+
+    /// <summary>
+    /// Maps a box from the pass that produced it back to crop pixels. A pass that ran at 4x
+    /// reports boxes four times too large and four times too far from the origin, and the
+    /// crop is itself positioned in screen coordinates by the caller - so an un-divided box
+    /// would put the highlight somewhere off down and to the right of the actual word.
+    /// </summary>
+    private static Rectangle Descale(Windows.Foundation.Rect rect, int scale) => new(
+        (int)Math.Round(rect.X / scale),
+        (int)Math.Round(rect.Y / scale),
+        (int)Math.Round(rect.Width / scale),
+        (int)Math.Round(rect.Height / scale));
 
     private async Task<OcrResult> RunAsync(Bitmap bitmap)
     {
