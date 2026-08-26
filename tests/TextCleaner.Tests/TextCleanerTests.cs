@@ -160,25 +160,56 @@ public class TextCleanerSpanTests
     }
 
     [Fact]
-    public void BoxAtFindsTheWordContainingAnOffset()
+    public void BoxOverFindsTheWordAtASingleCharacterRange()
     {
         var result = TextCleaner.CleanWords([Line("The", "quick", "brown")]);
 
         // "The" spans 0-2, "quick" 4-8, "brown" 10-14.
-        Assert.Equal(Box(0), TextCleaner.BoxAt(result.Spans, 0));
-        Assert.Equal(Box(0), TextCleaner.BoxAt(result.Spans, 2));
-        Assert.Equal(Box(50), TextCleaner.BoxAt(result.Spans, 4));
-        Assert.Equal(Box(100), TextCleaner.BoxAt(result.Spans, 14));
+        Assert.Equal(Box(0), TextCleaner.BoxOver(result.Spans, 0, 2));
+        Assert.Equal(Box(50), TextCleaner.BoxOver(result.Spans, 4, 8));
+        Assert.Equal(Box(100), TextCleaner.BoxOver(result.Spans, 10, 14));
     }
 
     [Fact]
-    public void BoxAtReturnsNullBetweenAndBeyondSpans()
+    public void BoxOverEnclosesEveryWordARangeCovers()
+    {
+        // The case that stranded the mark: a voice says "in 2018" as one unit and reports it
+        // as one range spanning both words, so marking only the word the range starts at
+        // leaves the mark on "in" for as long as the number takes to say.
+        var result = TextCleaner.CleanWords([Line("launched", "in", "2018")]);
+
+        // "launched" 0-7, "in" 9-10, "2018" 12-15.
+        var box = TextCleaner.BoxOver(result.Spans, 9, 15);
+
+        Assert.Equal(Rectangle.Union(Box(50), Box(100)), box);
+        Assert.NotEqual(Box(50), box);
+    }
+
+    [Fact]
+    public void BoxOverIncludesAWordTheRangeOnlyPartlyCovers()
+    {
+        var result = TextCleaner.CleanWords([Line("The", "quick", "brown")]);
+
+        // Starts inside "The" and ends inside "quick"; both are being spoken.
+        Assert.Equal(Rectangle.Union(Box(0), Box(50)), TextCleaner.BoxOver(result.Spans, 1, 5));
+    }
+
+    [Fact]
+    public void BoxOverTreatsASeparatingSpaceAsTheWordAfterIt()
     {
         var result = TextCleaner.CleanWords([Line("The", "quick")]);
 
-        Assert.Null(TextCleaner.BoxAt(result.Spans, 3));    // the separating space
-        Assert.Null(TextCleaner.BoxAt(result.Spans, 99));   // past the end
-        Assert.Null(TextCleaner.BoxAt(result.Spans, -1));
-        Assert.Null(TextCleaner.BoxAt([], 0));
+        // A range beginning on the space before a word still belongs to that word.
+        Assert.Equal(Box(50), TextCleaner.BoxOver(result.Spans, 3, 8));
+    }
+
+    [Fact]
+    public void BoxOverReturnsNullBeyondSpans()
+    {
+        var result = TextCleaner.CleanWords([Line("The", "quick")]);
+
+        Assert.Null(TextCleaner.BoxOver(result.Spans, 99, 120));   // past the end
+        Assert.Null(TextCleaner.BoxOver(result.Spans, 5, 4));      // inverted
+        Assert.Null(TextCleaner.BoxOver([], 0, 3));
     }
 }

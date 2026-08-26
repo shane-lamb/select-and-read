@@ -101,30 +101,56 @@ internal static partial class TextCleaner
     }
 
     /// <summary>
-    /// The box containing the given character offset, or null when the offset falls between
-    /// spans or outside the text.
+    /// The box enclosing every word the given character range touches, or null when the range
+    /// touches none. Both ends are inclusive.
     ///
-    /// A speech engine reports position as an offset into the text it was given, so this is
-    /// the lookup that turns "which word is being spoken" into "where to draw". Spans are
-    /// produced in reading order and never overlap, so a binary search is well defined; the
-    /// linear alternative is called once per spoken word, which is often enough for the
-    /// difference to be worth the few lines.
+    /// A speech engine reports position as a range of the text it was given, so this is the
+    /// lookup that turns "what is being spoken" into "where to draw". It takes a range rather
+    /// than a point because a single cue can cover more than one written word - a voice says
+    /// "in 2018" as one unit - and marking only the word the range starts at would leave the
+    /// mark on "in" for as long as the number takes to say (SPEC 16.1).
+    ///
+    /// Spans are produced in reading order and never overlap, so the first one is found by
+    /// binary search; the walk forward from it is over the handful the range covers.
     /// </summary>
-    internal static Rectangle? BoxAt(IReadOnlyList<Span> spans, int offset)
+    internal static Rectangle? BoxOver(IReadOnlyList<Span> spans, int from, int to)
     {
+        if (to < from) return null;
+
         var low = 0;
         var high = spans.Count - 1;
+        var first = -1;
 
+        // The leftmost span that ends at or after the range starts.
         while (low <= high)
         {
             var mid = (low + high) / 2;
             var span = spans[mid];
 
-            if (offset < span.Start) high = mid - 1;
-            else if (offset >= span.Start + span.Length) low = mid + 1;
-            else return span.Box;
+            if (span.Start + span.Length <= from)
+            {
+                low = mid + 1;
+            }
+            else
+            {
+                first = mid;
+                high = mid - 1;
+            }
         }
 
-        return null;
+        if (first < 0) return null;
+
+        Rectangle? box = null;
+
+        for (var i = first; i < spans.Count && spans[i].Start <= to; i++)
+        {
+            // A range that begins inside the whitespace before a word still belongs to that
+            // word, so overlap rather than containment is the test.
+            box = box is { } accumulated
+                ? Rectangle.Union(accumulated, spans[i].Box)
+                : spans[i].Box;
+        }
+
+        return box;
     }
 }

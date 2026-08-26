@@ -101,10 +101,10 @@ internal sealed class LocalReadingEngine : IReadingEngine
 
     internal LocalReadingEngine()
     {
-        // The synthesiser reports an offset into the text it was given; only this class knows
-        // what that text was recognised from, so the translation belongs here.
-        _speech.WordSpoken += offset => WordHighlighted?.Invoke(
-            offset is { } at ? TextCleaner.BoxAt(_lastSpans, at) : null);
+        // The synthesiser reports a range of the text it was given; only this class knows what
+        // that text was recognised from, so the translation belongs here.
+        _speech.WordSpoken += cue => WordHighlighted?.Invoke(
+            cue is { } spoken ? TextCleaner.BoxOver(_lastSpans, spoken.From, spoken.To) : null);
     }
 
     public void DiscardReplay()

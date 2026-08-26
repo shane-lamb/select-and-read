@@ -5,15 +5,22 @@ using Windows.Media.SpeechSynthesis;
 namespace SelectAndRead;
 
 /// <summary>
-/// Where the reading has got to, as a character offset into the text being spoken (SPEC 16.1).
+/// Where the reading has got to, as a range of characters in the text being spoken, closed
+/// at both ends (SPEC 16.1).
 ///
 /// The synthesiser publishes word boundaries as SpeechCue objects on a timed metadata track,
-/// each carrying the offsets of the word it covers in the *input* text. That is the whole
-/// reason the position can be tied back to a place on screen: an ordinal count of spoken
-/// words could not be, because one written token can produce several spoken ones - "$12.50"
-/// is measurably five cues, all pointing at the same six input characters.
+/// each carrying the offsets of the input text it covers. That is the whole reason the
+/// position can be tied back to a place on screen: an ordinal count of spoken words could
+/// not be, because one written token can produce several spoken ones - "$12.50" is
+/// measurably five cues over the same six input characters.
+///
+/// It is a range and not a single offset because a cue can also run the other way, covering
+/// *more* than one written word: "in 2018" comes back as one seven-character range repeated
+/// across five cues, since the voice groups the preposition with the number it expands.
+/// Reading only the start of that range marks "in" and leaves the mark stranded there for as
+/// long as "two thousand and eighteen" takes to say.
 /// </summary>
-internal readonly record struct WordCue(TimeSpan Start, int Offset);
+internal readonly record struct WordCue(TimeSpan Start, int From, int To);
 
 /// <summary>
 /// Synthesis is behind an interface so that the chunked, lower-latency implementation
@@ -33,11 +40,11 @@ internal interface ISpeechEngine : IDisposable
     Task SpeakAsync(string text, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Raised as each word starts, with its character offset into the text passed to
-    /// <see cref="SpeakAsync"/>, and with null when nothing is being spoken. Raised on a
-    /// timer thread, so handlers that touch UI must marshal.
+    /// Raised as the reading moves on, with the range of the text passed to
+    /// <see cref="SpeakAsync"/> that is now being spoken, and with null when nothing is.
+    /// Raised on a timer thread, so handlers that touch UI must marshal.
     /// </summary>
-    event Action<int?>? WordSpoken;
+    event Action<WordCue?>? WordSpoken;
 
     /// <summary>Holds playback where it is, leaving it resumable (SPEC 2.5).</summary>
     void Pause();
@@ -83,7 +90,7 @@ internal sealed class SpeechService : ISpeechEngine
 
     public bool IsSpeaking { get; private set; }
 
-    public event Action<int?>? WordSpoken;
+    public event Action<WordCue?>? WordSpoken;
 
     internal SpeechService()
     {
@@ -212,10 +219,16 @@ internal sealed class SpeechService : ISpeechEngine
 
             if (track is null) return [];
 
+            // EndPositionInInput is the index of the range's last character, not one past it.
+            // It is taken rather than assumed equal to the start because a cue routinely
+            // covers more than the one word - see WordCue.
             return track.Cues
                 .OfType<SpeechCue>()
                 .Where(cue => cue.StartPositionInInput is not null)
-                .Select(cue => new WordCue(cue.StartTime, cue.StartPositionInInput!.Value))
+                .Select(cue => new WordCue(
+                    cue.StartTime,
+                    cue.StartPositionInInput!.Value,
+                    cue.EndPositionInInput ?? cue.StartPositionInInput!.Value))
                 .OrderBy(cue => cue.Start)
                 .ToList();
         }
@@ -275,7 +288,7 @@ internal sealed class SpeechService : ISpeechEngine
         if (index < 0 || index == _lastReported) return;
 
         _lastReported = index;
-        WordSpoken?.Invoke(_cues[index].Offset);
+        WordSpoken?.Invoke(_cues[index]);
     }
 
     /// <summary>
