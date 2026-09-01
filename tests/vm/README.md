@@ -53,6 +53,12 @@ security add-generic-password -s sar-vm-guest -a kryte -w
 `vmrun`'s argv and are briefly visible in `ps`, which is accepted for a local test VM and is
 why `deploy.sh` must never gain `set -x`.
 
+**Only the service name (`-s`) matters.** `deploy.sh` looks each secret up by service alone,
+so the account (`-a`) is a free label and need not be the guest username or the VM's name —
+tying the lookup to `$VM_USER` would break the moment that changed. A `security
+find-generic-password` that passes `-a` will report an item missing when it is only labelled
+differently, which looks exactly like credentials that were never stored.
+
 **VMware Tools must be installed and running in the guest.** Every guest operation goes
 through it. Without it `vmrun` hangs for about four minutes and then reports
 `VIX_E_TOOLS_NOT_RUNNING`, and `checkToolsState` says `unknown` rather than anything

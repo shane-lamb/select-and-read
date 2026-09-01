@@ -643,9 +643,7 @@ internal static class Program
 
         engine.WordHighlighted += box =>
         {
-            overlay?.Show(box is { } r && origin is { } at
-                ? r with { X = r.X + at.X, Y = r.Y + at.Y }
-                : null);
+            overlay?.Show(box);
 
             if (box is not { } rect)
             {
@@ -660,6 +658,10 @@ internal static class Program
         };
 
         using var bitmap = new Bitmap(path);
+
+        // The fixture stands in for a reading's crop. The mark is cut from those pixels, so
+        // the overlay needs the image itself and not only where it sits.
+        if (overlay is not null && origin is { } at) overlay.SetSource(bitmap, at);
 
         string? text;
 
@@ -701,17 +703,18 @@ internal static class Program
     }
 
     /// <summary>
-    /// Reports what shape the word mark actually ended up, and where.
+    /// Reports where the word mark landed and whether it really is an inversion of the word
+    /// underneath it.
     ///
-    /// The mark now covers the whole screen and is cut back to a box and two crosshair lines,
-    /// which changes what can go wrong. A region that fails to apply no longer means a mark
-    /// that covers one word - it means an opaque black rectangle over the entire desktop, and
-    /// the app has no window a user could close. Regions are invisible either way, so this
-    /// asks Windows what it has: not just that the word is excluded, but that ordinary empty
-    /// desktop is too, and that each of the three strokes really is present.
+    /// The mark is a patch of inverted pixels laid over the word, so the failures worth
+    /// catching are a patch in the wrong place, a patch the size of the screen, and - the
+    /// quiet one - a correctly placed patch painted black, or painted from the wrong part of
+    /// the source. Nothing about any of those is visible in the geometry alone, so this
+    /// paints the mark into a bitmap and compares it, pixel for pixel, against the negative
+    /// of what it was given.
     ///
-    /// Runs under `prlctl exec` in session 0: the window is created and shaped there even
-    /// though nothing can be drawn, and it is the geometry that is being asked about.
+    /// Runs under `prlctl exec` in session 0, where nothing can be drawn to a screen. The
+    /// mark is asked to print itself instead, which needs only its own window.
     /// </summary>
     private static int HighlightMetrics()
     {
@@ -720,83 +723,88 @@ internal static class Program
 
         var screen = ScreenCapture.GetScreenSize();
 
-        // An arbitrary but asymmetric word box, well away from both screen edges and from the
-        // centre, so a transposed or forgotten coordinate cannot pass by coincidence.
-        var word = new Rectangle(400, 250, 120, 30);
-        var centre = new Point(word.X + word.Width / 2, word.Y + word.Height / 2);
+        // Every pixel a different colour, and none of the three channels agreeing with
+        // another, so a patch taken from the wrong offset - or a channel left uninverted -
+        // cannot match by coincidence.
+        using var source = new Bitmap(200, 100, PixelFormat.Format32bppRgb);
+        for (var y = 0; y < source.Height; y++)
+        for (var x = 0; x < source.Width; x++)
+        {
+            source.SetPixel(x, y, Color.FromArgb(
+                (x * 7) % 256, (y * 11) % 256, ((x + y) * 13) % 256));
+        }
+
+        // An asymmetric word, off-centre in an asymmetrically placed source, so a transposed
+        // or forgotten coordinate cannot pass either.
+        var origin = new Point(300, 200);
+        var word = new Rectangle(40, 25, 60, 20);
 
         using var overlay = new HighlightOverlay();
+        overlay.SetSource(source, origin);
         overlay.Show(word);
 
-        // Let the shaping and positioning settle before reading them back.
+        // Let the positioning settle before reading it back.
         Application.DoEvents();
+
+        // The bleed, and the clamp that keeps it inside the pixels there are.
+        var marked = Rectangle.Inflate(word, 5, 5);
+        marked.Intersect(new Rectangle(Point.Empty, source.Size));
+        var expected = marked with { X = marked.X + origin.X, Y = marked.Y + origin.Y };
 
         Native.GetWindowRect(overlay.Handle, out var rect);
         var window = Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
 
-        var region = Native.CreateRectRgn(0, 0, 0, 0);
-        var shaped = Native.GetWindowRgn(overlay.Handle, region) != 0;
-
         Console.WriteLine($"screen   : {screen.Width}x{screen.Height}");
+        Console.WriteLine($"source   : {source.Width}x{source.Height} at {origin.X},{origin.Y}");
         Console.WriteLine($"word     : {word.Width}x{word.Height} at {word.X},{word.Y}");
+        Console.WriteLine($"expected : {expected.Width}x{expected.Height} at {expected.X},{expected.Y}");
         Console.WriteLine($"window   : {window.Width}x{window.Height} at {window.X},{window.Y}");
-        Console.WriteLine($"shaped   : {shaped}");
 
-        if (!shaped)
+        var placed = window == expected;
+        var fullScreen = window.Size == screen;
+
+        Console.WriteLine($"placed   : {placed}");
+        Console.WriteLine($"full screen : {fullScreen}");
+
+        if (!placed || window.Width <= 0 || window.Height <= 0)
         {
-            Native.DeleteObject(region);
-            Console.Error.WriteLine(
-                "The mark has no window region, so it is covering the entire screen.");
+            Console.Error.WriteLine(fullScreen
+                ? "The mark is covering the whole screen instead of the word."
+                : "The mark is not where the word is, so nothing can be read back from it.");
             return 1;
         }
 
-        // Window coordinates, which for a screen-sized window at the origin are screen
-        // coordinates (SPEC 4.1).
-        var onWord = Native.PtInRegion(region, centre.X, centre.Y);
-        var intoWord = Native.PtInRegion(region, word.Left + 1, centre.Y);
-        var onAcross = Native.PtInRegion(region, 1, centre.Y);
-        var onDown = Native.PtInRegion(region, centre.X, 1);
-        var onEmpty = Native.PtInRegion(region, centre.X + 300, centre.Y + 300);
+        // Printed rather than screenshotted: the pixels are the point, and asking the window
+        // for them works in a session that has no screen to photograph.
+        using var painted = new Bitmap(window.Width, window.Height, PixelFormat.Format32bppRgb);
+        overlay.DrawToBitmap(painted, new Rectangle(0, 0, window.Width, window.Height));
 
-        // Walked rather than sampled at a known offset, so this reports what the gap and the
-        // stroke actually came out as instead of confirming the number it was told. Walked
-        // off the centre line too: on the centre the crosshair band adjoins the box, and the
-        // stroke would be measured as running on into it.
-        var (gap, stroke) = Measure(region, word.Left - 1, word.Top + 2);
-        Native.DeleteObject(region);
+        var wrong = 0;
+        Point? first = null;
 
-        Console.WriteLine($"gap             : {gap}px");
-        Console.WriteLine($"stroke          : {stroke}px");
-        Console.WriteLine($"covers word     : {onWord}");
-        Console.WriteLine($"line into word  : {intoWord}");
-        Console.WriteLine($"line across     : {onAcross}");
-        Console.WriteLine($"line down       : {onDown}");
-        Console.WriteLine($"covers desktop  : {onEmpty}");
+        for (var y = 0; y < painted.Height; y++)
+        for (var x = 0; x < painted.Width; x++)
+        {
+            var was = source.GetPixel(marked.X + x, marked.Y + y);
+            var now = painted.GetPixel(x, y);
 
-        var fullScreen = window == new Rectangle(Point.Empty, screen);
-        Console.WriteLine($"full screen     : {fullScreen}");
+            if (now.R == 255 - was.R && now.G == 255 - was.G && now.B == 255 - was.B) continue;
 
-        // The word must be clear, from the box and from either line; the desktop must be
-        // clear everywhere the mark is not; and all three strokes must actually be there.
-        if (onWord || intoWord || onEmpty) return 1;
-        return fullScreen && gap > 0 && stroke > 0 && onAcross && onDown ? 0 : 1;
-    }
+            wrong++;
+            first ??= new Point(x, y);
+        }
 
-    /// <summary>
-    /// Walks left from just outside the word, counting the clear pixels before the box and
-    /// then the width of the box's stroke.
-    /// </summary>
-    private static (int Gap, int Stroke) Measure(IntPtr region, int fromX, int y)
-    {
-        var x = fromX;
+        Console.WriteLine($"inverted : {wrong == 0}");
 
-        var gap = 0;
-        while (x > 0 && !Native.PtInRegion(region, x, y)) { gap++; x--; }
+        if (wrong == 0) return 0;
 
-        var stroke = 0;
-        while (x > 0 && Native.PtInRegion(region, x, y)) { stroke++; x--; }
-
-        return (gap, stroke);
+        var at = first!.Value;
+        Console.Error.WriteLine(
+            $"{wrong} of {painted.Width * painted.Height} pixels are not the negative of the " +
+            $"word beneath them; the first is at {at.X},{at.Y}, where " +
+            $"{source.GetPixel(marked.X + at.X, marked.Y + at.Y)} was painted as " +
+            $"{painted.GetPixel(at.X, at.Y)}.");
+        return 1;
     }
 
     private static Panel? FindScrollPanel(Control parent)

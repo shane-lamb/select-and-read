@@ -1,49 +1,51 @@
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+
 namespace SelectAndRead;
 
 /// <summary>
 /// Marks the word being read aloud, on top of the live desktop (SPEC 16.4).
 ///
-/// A box around the word, plus screen-spanning crosshair lines centred on it - the same two
-/// cues SelectionOverlay gives the cursor, for the same reason. At low acuity a box a few
-/// hundred pixels away is not findable by scanning; lines that run the width and height of
-/// the screen are, and they lead the eye to the box.
+/// The mark is the word's own pixels inverted - a photo negative of the word and a little
+/// bleed around it. That is what makes it a highlighter rather than a decoration: light text
+/// on a dark page becomes dark text on a light block and the other way about, so the mark
+/// contrasts whatever it lands on without owning a colour of its own, and the reader's eye
+/// meets a solid block rather than a stroke to resolve.
 ///
-/// The window covers the screen but is shaped with SetWindowRgn down to just those strokes,
-/// so it has no pixels anywhere else - most importantly none over the word itself, and none
-/// over the rest of the desktop. That is stronger than painting transparently: there is
-/// nothing to see through, nothing to hit-test, and click-through comes for free because the
-/// removed area is not part of the window at all.
+/// The pixels come from the crop the reading was made from, handed over by
+/// <see cref="SetSource"/> and inverted once up front. They cannot be read back off the
+/// screen at each word: the window covers the word it marks, adjacent words overlap once the
+/// bleed is added, and a capture would therefore pick the previous word's mark back up and
+/// invert it a second time.
 ///
 /// The coordinate discipline is SelectionOverlay's, for the same reason (SPEC 4.1): the
-/// window is placed with SetWindowPos in raw physical pixels and never autoscaled, so the
-/// rectangle handed to <see cref="Show"/>, the client coordinates it is painted in, and the
-/// screen are all the same numbers.
+/// window is placed with SetWindowPos in raw physical pixels and never autoscaled. Word
+/// boxes arrive in crop coordinates and the crop's origin is added here, so the pixels being
+/// inverted and the place they are painted can never disagree.
 /// </summary>
 internal sealed class HighlightOverlay : Form
 {
     /// <summary>
-    /// Every stroke is a white core on a black backing, so one of the two contrasts whatever
-    /// is underneath - white sandwiched in black rather than merely paired with it, which is
-    /// what keeps it readable over light content, dark content and a photograph alike. These
-    /// are SelectionOverlay's guide widths, because this is the same mark for the same eyes.
-    /// </summary>
-    private const int Stroke = 11;
-    private const int Core = 5;
-
-    /// <summary>Black either side of the core. Derived so the core stays centred.</summary>
-    private const int Backing = (Stroke - Core) / 2;
-
-    /// <summary>
-    /// Clear space between the word and the box. Without it the stroke sits against the
-    /// glyphs, and a descender or an accent reads as part of the mark rather than as part of
-    /// the letter - at which point the mark is interfering with the very thing it is pointing
-    /// at. It also gives the recogniser's own box a little slack, since the bounds it reports
-    /// are tight to the ink rather than to the type.
+    /// How far the mark bleeds past the word. Without it the inversion stops at the ink, and
+    /// the recogniser's boxes are tight to the ink rather than to the type - so a descender
+    /// or an accent would hang outside the block that is meant to be holding the word.
     /// </summary>
     private const int Gap = 5;
 
+    /// <summary>
+    /// The crop the current reading was made from, already inverted. Retained rather than
+    /// borrowed because a replay marks its words too, and by then the pipeline has disposed
+    /// the crop it read from. This is the selection and not the screen, so it is not the
+    /// freeze frame the pipeline goes out of its way not to hold - though a selection of the
+    /// whole screen amounts to the same thing until the next reading replaces it.
+    /// </summary>
+    private Bitmap? _inverted;
+
+    /// <summary>Where <see cref="_inverted"/> sits on screen.</summary>
+    private Point _origin;
+
+    /// <summary>The word being marked, in crop coordinates.</summary>
     private Rectangle _word = Rectangle.Empty;
-    private Size _screen;
 
     internal HighlightOverlay()
     {
@@ -56,10 +58,13 @@ internal sealed class HighlightOverlay : Form
         BackColor = Color.Black;
         Text = "Select and Read";
 
-        // Deliberately no OptimizedDoubleBuffer. The window is screen-sized, so a back buffer
-        // would be tens of megabytes reallocated on every word, to composite the few thousand
-        // pixels the region actually admits. The region is what keeps the painting cheap.
-        SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
+        // Buffered because the window moves and repaints on every word, and an unbuffered
+        // move shows the empty client area for a frame - a black flash on each word. The
+        // buffer is the size of one word, not of the screen.
+        SetStyle(
+            ControlStyles.UserPaint |
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer, true);
 
         // Built here, on the UI thread, and not left until the first word arrives.
         // InvokeRequired answers false for a control with no handle yet, so a first call
@@ -78,23 +83,50 @@ internal sealed class HighlightOverlay : Form
 
             var cp = base.CreateParams;
 
-            // NOACTIVATE is the load-bearing one: without it, showing the mark steals focus
-            // from whatever the user is reading, and on a first show it would take the
-            // foreground away mid-sentence.
+            // Both of the last two are load-bearing. TRANSPARENT is the only thing letting a
+            // click through to the app underneath, since the mark really does cover the word
+            // rather than being shaped away from it. Without NOACTIVATE, showing the mark
+            // steals focus from whatever the user is reading, and on a first show it would
+            // take the foreground away mid-sentence.
             cp.ExStyle |= WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
             return cp;
         }
     }
 
     /// <summary>
-    /// Keeps the window from ever taking the foreground, which the shaped window would
-    /// otherwise still do the first time it is shown.
+    /// Keeps the window from ever taking the foreground, which it would otherwise still do
+    /// the first time it is shown.
     /// </summary>
     protected override bool ShowWithoutActivation => true;
 
     /// <summary>
-    /// Marks the given word, in screen pixels. Safe to call from any thread; a null or empty
-    /// rectangle hides the mark.
+    /// Hands over the pixels the marks will be cut from: the crop a reading was made from,
+    /// and where on screen it came from. Safe to call from any thread.
+    /// </summary>
+    internal void SetSource(Bitmap crop, Point origin)
+    {
+        // Inverted here, on the calling thread and before any marshalling. The crop belongs
+        // to the caller and is disposed as soon as the reading ends, so the copy has to be
+        // taken while the call is still on the stack.
+        Adopt(Invert(crop), origin);
+    }
+
+    private void Adopt(Bitmap inverted, Point origin)
+    {
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => Adopt(inverted, origin));
+            return;
+        }
+
+        _inverted?.Dispose();
+        _inverted = inverted;
+        _origin = origin;
+    }
+
+    /// <summary>
+    /// Marks the given word, in crop coordinates. Safe to call from any thread; a null or
+    /// empty rectangle hides the mark, as does having no source to cut it from.
     /// </summary>
     internal void Show(Rectangle? word)
     {
@@ -104,7 +136,7 @@ internal sealed class HighlightOverlay : Form
             return;
         }
 
-        if (word is not { Width: > 0, Height: > 0 } rect)
+        if (_inverted is null || word is not { Width: > 0, Height: > 0 } rect)
         {
             Clear();
             return;
@@ -112,9 +144,11 @@ internal sealed class HighlightOverlay : Form
 
         _word = rect;
 
-        // Re-read rather than cached: a resolution change between readings would otherwise
-        // leave the crosshair stopping short of, or running past, the new screen.
-        _screen = ScreenCapture.GetScreenSize();
+        if (Marked.IsEmpty)
+        {
+            Clear();
+            return;
+        }
 
         // Placed before being shown and again after, as SelectionOverlay does for the same
         // reason: making a Form visible applies its own cached bounds, which would put the
@@ -123,13 +157,11 @@ internal sealed class HighlightOverlay : Form
 
         // WinForms has to agree that the window is visible. Showing it with SWP_SHOWWINDOW
         // alone leaves Control.Visible false, and Invalidate on a control WinForms believes
-        // is hidden does nothing - so the mark would be a correctly placed, correctly shaped,
+        // is hidden does nothing - so the mark would be a correctly placed, correctly sized,
         // permanently unpainted window.
         if (!Visible) Visible = true;
 
         Place();
-        ApplyShape();
-
         Invalidate();
 
         // Painted now rather than whenever the queue drains: the mark is chasing speech.
@@ -148,112 +180,101 @@ internal sealed class HighlightOverlay : Form
         Visible = false;
     }
 
-    private void Place() => Native.SetWindowPos(
-        Handle, IntPtr.Zero, 0, 0, _screen.Width, _screen.Height,
-        Native.SWP_NOZORDER | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
-
-    /// <summary>The clear space the box is held off the word by, and the hole in the shape.</summary>
-    private Rectangle Clearance => Rectangle.Inflate(_word, Gap, Gap);
-
-    /// <summary>The box's outer edge - where the crosshair lines stop.</summary>
-    private Rectangle Surround => Rectangle.Inflate(_word, Gap + Stroke, Gap + Stroke);
-
-    private Point Centre => new(_word.X + _word.Width / 2, _word.Y + _word.Height / 2);
-
     /// <summary>
-    /// Cuts the window down to the box and the two lines: a ring around the word, plus a
-    /// full-width and a full-height band that both stop at the box rather than crossing it.
-    ///
-    /// Everything else is removed, so the window covers the screen without covering anything
-    /// on it. The window owns the region once SetWindowRgn succeeds, hence the delete only on
-    /// failure.
+    /// What the mark covers, in crop coordinates: the word plus its bleed, clamped to the
+    /// pixels there are. Clamping to the crop clamps to the screen too, since the crop was
+    /// taken from it.
     /// </summary>
-    private void ApplyShape()
+    private Rectangle Marked
     {
-        var surround = Surround;
-        var centre = Centre;
-
-        var shape = RectRegion(surround);
-        var hole = RectRegion(Clearance);
-        var box = RectRegion(surround);
-
-        try
+        get
         {
-            // The box: a ring around the clearance, so neither the word nor the space held
-            // clear around it is part of the window.
-            Native.CombineRgn(shape, shape, hole, Native.RGN_DIFF);
+            if (_word.IsEmpty || _inverted is not { } source) return Rectangle.Empty;
 
-            AddBand(shape, box, new Rectangle(
-                0, centre.Y - Stroke / 2, _screen.Width, Stroke));
-
-            AddBand(shape, box, new Rectangle(
-                centre.X - Stroke / 2, 0, Stroke, _screen.Height));
-
-            if (Native.SetWindowRgn(Handle, shape, bRedraw: true) == 0)
-            {
-                Native.DeleteObject(shape);
-            }
-        }
-        finally
-        {
-            Native.DeleteObject(hole);
-            Native.DeleteObject(box);
+            var marked = Rectangle.Inflate(_word, Gap, Gap);
+            marked.Intersect(new Rectangle(Point.Empty, source.Size));
+            return marked;
         }
     }
 
-    /// <summary>Adds one crosshair band, minus the box, to the shape being built.</summary>
-    private static void AddBand(IntPtr shape, IntPtr box, Rectangle band)
+    private void Place()
     {
-        var region = RectRegion(band);
+        var marked = Marked;
 
-        try
-        {
-            Native.CombineRgn(region, region, box, Native.RGN_DIFF);
-            Native.CombineRgn(shape, shape, region, Native.RGN_OR);
-        }
-        finally
-        {
-            Native.DeleteObject(region);
-        }
+        Native.SetWindowPos(
+            Handle, IntPtr.Zero,
+            marked.X + _origin.X, marked.Y + _origin.Y, marked.Width, marked.Height,
+            Native.SWP_NOZORDER | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
     }
-
-    private static IntPtr RectRegion(Rectangle r) =>
-        Native.CreateRectRgn(r.Left, r.Top, r.Right, r.Bottom);
 
     protected override void OnPaintBackground(PaintEventArgs e)
     {
-        // Painted entirely in OnPaint; the default fill would flicker on every word.
+        // Painted entirely in OnPaint, which covers the whole client area; the default fill
+        // would only flicker on every word.
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var marked = Marked;
+        if (marked.IsEmpty || _inverted is not { } source) return;
+
+        var g = e.Graphics;
+
+        // The blit is 1:1, and these are what keep it that way: without them GDI+ is still
+        // entitled to resample and to offset by half a pixel, which would soften the very
+        // glyphs the mark is pointing at.
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+
+        g.DrawImage(source, new Rectangle(Point.Empty, marked.Size), marked, GraphicsUnit.Pixel);
     }
 
     /// <summary>
-    /// Black everywhere, then the white cores laid back over it. Nothing here masks the word
-    /// or the desktop: the window region has already removed both, so a fill that covers them
-    /// is clipped away before it reaches the screen. That is what lets the backing be one
-    /// Clear and each core one or two rectangles, instead of bands counted out individually.
+    /// A photo negative of the whole crop, taken once so that marking a word is a single
+    /// blit rather than a colour pass on a path that runs every word.
     /// </summary>
-    protected override void OnPaint(PaintEventArgs e)
+    private static Bitmap Invert(Bitmap crop)
     {
-        if (_word.IsEmpty) return;
+        // Format32bppRgb like the capture it came from: BitBlt leaves the alpha bytes at
+        // zero, and a format with an alpha channel would read those as fully transparent
+        // (SPEC 3).
+        var inverted = new Bitmap(crop.Width, crop.Height, PixelFormat.Format32bppRgb);
 
-        var g = e.Graphics;
-        g.Clear(Color.Black);
+        try
+        {
+            using var attributes = new ImageAttributes();
+            attributes.SetColorMatrix(new ColorMatrix(
+            [
+                [-1f,  0f,  0f, 0f, 0f],
+                [ 0f, -1f,  0f, 0f, 0f],
+                [ 0f,  0f, -1f, 0f, 0f],
+                [ 0f,  0f,  0f, 1f, 0f],
+                [ 1f,  1f,  1f, 0f, 1f],
+            ]));
 
-        using var white = new SolidBrush(Color.White);
-        using var black = new SolidBrush(Color.Black);
+            using var g = Graphics.FromImage(inverted);
 
-        // The line cores, held out of the box so the two marks stay legible where they meet.
-        var clip = g.Save();
-        g.ExcludeClip(Surround);
-        g.FillRectangle(white, 0, Centre.Y - Core / 2, _screen.Width, Core);
-        g.FillRectangle(white, Centre.X - Core / 2, 0, Core, _screen.Height);
-        g.Restore(clip);
+            // As in OnPaint: the copy is 1:1 and must stay pixel for pixel, or every mark
+            // inherits a half-pixel smear of the glyphs it is meant to be showing.
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
 
-        // The box core: white out to the core's outer edge, then black back over the inner
-        // backing band. The word and its clearance are outside the region, so the second fill
-        // only lands on the innermost band of the ring.
-        g.FillRectangle(white, Rectangle.Inflate(
-            _word, Gap + Backing + Core, Gap + Backing + Core));
-        g.FillRectangle(black, Rectangle.Inflate(
-            _word, Gap + Backing, Gap + Backing));
+            g.DrawImage(
+                crop, new Rectangle(0, 0, crop.Width, crop.Height),
+                0, 0, crop.Width, crop.Height, GraphicsUnit.Pixel, attributes);
+
+            return inverted;
+        }
+        catch
+        {
+            inverted.Dispose();
+            throw;
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _inverted?.Dispose();
+        base.Dispose(disposing);
     }
 }

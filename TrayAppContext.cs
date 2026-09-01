@@ -43,13 +43,6 @@ internal sealed class TrayAppContext : ApplicationContext
     /// </summary>
     private int _operationId;
 
-    /// <summary>
-    /// Where the last crop was taken from. The engine locates words within the crop, so this
-    /// is the offset that turns those boxes back into screen positions - and because the app
-    /// works in one coordinate space it is a plain addition (SPEC 4.1, 16.4).
-    /// </summary>
-    private Point _cropOrigin;
-
     internal TrayAppContext()
     {
         _config = Config.Load();
@@ -260,11 +253,16 @@ internal sealed class TrayAppContext : ApplicationContext
             _state = State.Working;
 
             // Clamped here rather than left to Crop, which clamps identically: the highlight
-            // adds this origin to every word box, so it has to be the crop's real origin and
-            // not merely where the drag started.
+            // marks words by inverting the crop's own pixels at this origin, so it has to be
+            // the crop's real origin and not merely where the drag started.
             var region = Rectangle.Intersect(selection.Value, new Rectangle(Point.Empty, screen));
-            _cropOrigin = region.Location;
             crop = ScreenCapture.Crop(frame, region);
+
+            // The overlay takes its own copy, so this outlives the frame and the crop both.
+            // Handed over whatever the settings say and whichever engine will read it: it
+            // costs one copy, and it keeps what the mark would invert in step with what was
+            // actually selected.
+            _highlight.SetSource(crop, region.Location);
         }
 
         using var _ = crop;
@@ -427,9 +425,7 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         if (!_config.HighlightWhileReading) return;
 
-        _highlight.Show(word is { } box
-            ? box with { X = box.X + _cropOrigin.X, Y = box.Y + _cropOrigin.Y }
-            : null);
+        _highlight.Show(word);
     }
 
     private void Report(string title, string message, ToolTipIcon icon = ToolTipIcon.Error) =>

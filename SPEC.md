@@ -906,7 +906,7 @@ saved-password stores offer, and the right level for a tray utility.
 | What does a cloud reading actually cost? | **Open.** Estimated at ~$0.017 (§14.1) from inferred image-token counts. `--read-file` prints real `usage`; replace the estimate with measurement. |
 | Does `MediaStreamSource` stream PCM cleanly on ARM64? | **Open.** The highest-risk untested piece of §14.3; underruns or clicks would show up here first. |
 | Does resuming a paused `MediaStreamSource` pick up cleanly mid-stream? | **Open.** Pausing a live source is the one part of §2.5 with no local equivalent to fall back on. A gap, a click or a dropped chunk on resume shows up here; the local engine's seekable stream is not at risk in the same way. |
-| Does the word mark look right on screen? | **Was resolved for the box-only mark**, photographed during a live reading of `windows-ui-text.png`. **Reopened by the crosshair lines (§16.4), which are unphotographed:** the Parallels licence on the test VM has expired, so nothing Windows-side can currently be run. `tests/vm/drive-highlight.ps1` reproduces the shot once a VM is available. |
+| Does the word mark look right on screen? | **Resolved: yes.** Photographed during a live reading of `windows-ui-text.png` on Windows 11 ARM64 — the marked word inverts cleanly, lands on its own glyphs, and reads as a highlighter against both the fixture and the page behind it. All 58 words were marked. `tests/vm/drive-highlight.ps1` reproduces the shot; `--highlight-metrics` proves the pixels are the negative of their source without needing one. |
 | Does the boundary track ever take longer than 250 ms to publish? | **Open.** Measured as immediate on the fixtures, but the wait is a guess at the tail. If it is routinely exceeded the mark silently stops appearing rather than delaying audio, which is the right failure but a quiet one. |
 | Do Windows' downloadable natural voices emit boundary cues? | **Open.** All five voices on the test VM do (§16.1), but they are the OneCore set; no *Natural* voice is installed there, and §7.2 already treats their availability as a runtime probe. |
 | Does a cloud reading survive being paused past the 60 s receive timeout? | **Open.** It should: the timeout caps silence *from the server*, and the socket finishes independently of playback, so a pause should not reach it. Untested (§13.4). |
@@ -964,7 +964,7 @@ Two consequences are load-bearing:
   large and four times too far from the origin. They are divided back down before leaving
   `OcrService`, so nothing downstream needs to know a pass ran enlarged.
 
-The crop's own origin is added by `TrayAppContext`, which is a plain addition and not a
+The crop's own origin is added by `HighlightOverlay`, which is a plain addition and not a
 conversion — screen, freeze frame and crop are one coordinate space (§4.1).
 
 ### 16.3 The cloud engine has no mark
@@ -977,38 +977,58 @@ later.
 
 ### 16.4 The mark itself
 
-The mark is a box around the word plus screen-spanning crosshair lines centred on it —
-the same two cues the selection overlay gives the cursor (§2.2), for the same reason. A box
-alone is only findable if you already know roughly where it is; at low acuity, hunting for
-one on a 4K screen costs more than the mark saves. Lines that run the full width and height
-lead the eye to it from anywhere, and they cost nothing extra to draw.
+The mark is the word's own pixels inverted — a photo negative of the word and a few pixels of
+bleed around it. It works as a highlighter rather than as an outline: light text on a dark
+page becomes dark text on a light block and the other way about, so the mark contrasts
+whatever it lands on without owning a colour of its own, and the eye meets a solid block
+instead of a stroke to resolve. Nothing is drawn *around* the word, so nothing has to be held
+clear of it.
 
-The window covers the screen and is then cut back with `SetWindowRgn` to just those strokes,
-so it has **no pixels anywhere else** — none over the word, and none over the rest of the
-desktop. That is stronger than drawing transparently, and it makes click-through free, since
-the removed area is not part of the window at all. It also relocates the worst failure: a
-region that fails to apply no longer means a mark covering one word, it means an opaque
-rectangle over the whole screen with no window a user could close.
+The pixels are cut from the crop the reading was made from, handed to the overlay by
+`SetSource` and inverted once up front. **They cannot be read back off the screen at each
+word**, and the reason is worth stating because a live capture is the obvious simplification:
+the window covers the word it marks, consecutive words on a line overlap once the bleed is
+added, so a capture would pick the previous word's mark back up and invert it a second time —
+a strip of untouched pixels at the leading edge of every word. Hiding the window first to
+avoid that adds a hide, a pump and a repaint race to a path that runs every 150–400 ms.
 
-`WS_EX_NOACTIVATE` and `ShowWithoutActivation` keep it from ever taking the foreground, which
-would otherwise interrupt the reader mid-sentence.
+Inverting the crop is pixel-identical to inverting the screen whenever the screen has not
+changed, which is the assumption the mark already makes: it is deliberately not suppressed
+when the page moves underneath it, since detecting that would mean holding the freeze frame
+alive for the whole reading (§2.2), and a reader who has scrolled the page away has stopped
+following the mark anyway.
 
-Every stroke is a white core on a black backing, at the selection overlay's guide widths —
-11px overall, a 5px core, 3px of black either side. White *sandwiched* in black rather than
-merely paired with it is what keeps it readable over light content, dark content and a
-photograph alike; a two-band border has an edge that vanishes against one or the other.
+The overlay keeps its own inverted copy rather than borrowing the crop, because a replay marks
+its words too and by then the pipeline has disposed what it read from. The copy is the
+selection and not the screen, so it is not the freeze frame §2.2 goes out of its way not to
+hold — though a selection of the whole screen amounts to the same thing until the next reading
+replaces it.
 
-The box is held 5px clear of the word rather than drawn against it. Touching the glyphs,
-the stroke reads as part of the letterform — a descender or an accent becomes ambiguous at
-exactly the moment the reader is looking hardest — and the recogniser's boxes are tight to
-the ink rather than to the type, so they have no slack of their own to give.
+Word boxes reach the overlay in **crop** coordinates and the crop's origin is added there, so
+the pixels being inverted and the place they are painted cannot disagree — one origin, applied
+once, in the only class that needs both halves of it.
 
-The lines stop at the box rather than crossing it, so nothing is ever drawn over the word,
-and the box stays legible where the three strokes meet.
+The bleed is 5px: without it the inversion stops at the ink, and the recogniser's boxes are
+tight to the ink rather than to the type, so a descender or an accent would hang outside the
+block that is meant to be holding the word.
 
-`--highlight-metrics` checks the shape, since a region is invisible either way: it asserts
-not only that the word is excluded but that ordinary empty desktop is too, and that all three
-strokes are actually present.
+`WS_EX_TRANSPARENT` is load-bearing rather than incidental. The mark genuinely covers the
+word, so this ex-style is the only thing letting a click reach the application underneath.
+`WS_EX_NOACTIVATE` and `ShowWithoutActivation` keep the window from ever taking the
+foreground, which would otherwise interrupt the reader mid-sentence.
+
+The window is the size of one word, which is what makes double buffering the right choice
+here: it moves and repaints on every word, and unbuffered it shows its empty client area for
+a frame — a black flash on each word. The blit itself is 1:1, with nearest-neighbour
+interpolation and a half-pixel offset, so GDI+ cannot resample or shift the very glyphs the
+mark is pointing at.
+
+`--highlight-metrics` checks the pixels and not only the geometry, since a patch in the right
+place painted black looks exactly like a patch in the right place painted correctly to
+everything else. It gives the mark a source in which every pixel is a different colour and no
+two channels agree, then asks the window to print itself and compares the result pixel for
+pixel against the negative of what it was given. Printing rather than screenshotting is what
+lets it run in a session with no screen to photograph.
 
 Two things have to be true for any of it to appear, and each fails silently on its own.
 `IncludeWordBoundaryMetadata` must be set on the synthesiser or no track is published at
@@ -1016,7 +1036,7 @@ all; and the mark's window handle must be created on the UI thread, because `Inv
 answers false for a control that has no handle yet, so the first call from the speech timer
 would otherwise build the window on a pump-less thread where it can never paint. `Visible`
 must also be set through WinForms rather than with `SWP_SHOWWINDOW` alone, or `Invalidate`
-is a no-op on a window WinForms believes is hidden and the mark is placed, shaped and never
+is a no-op on a window WinForms believes is hidden and the mark is placed, sized and never
 painted. `--read-local` exists because every other check passes while these are wrong.
 
 Position is read from `MediaPlaybackSession.Position` on a 50 ms timer rather than from

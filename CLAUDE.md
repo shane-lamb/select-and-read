@@ -89,7 +89,7 @@ interactive loop, and are the fastest way to diagnose almost anything:
 | `--markers ["<text>"] [--voice <n>] [--play]` | Which voices emit word-boundary cues, and what they contain |
 | `--read-local <png> [--overlay <x>,<y>]` | Whole local pipeline; logs every word marked, and can draw the real mark |
 | `--settings-metrics` | Settings dialog size, scrollability and whether Save is reachable |
-| `--highlight-metrics` | The word mark's window rect and whether its region really excludes the word |
+| `--highlight-metrics` | The word mark's window rect, and whether its pixels really are the negative of the word |
 
 `--ocr-file` also reports the measured glyph height and chosen upscale factor on stderr,
 which is the first thing to look at for any "the OCR read it wrong" report. `--read-file` is
@@ -256,6 +256,14 @@ entry points sharing one implementation — the string overload is the word one 
 word per line — or the spoken text starts depending on whether anything asked for spans.
 `OcrService` therefore cleans recognised *words*, not `OcrLine.Text`; the fixtures are what
 hold "line text == its words joined by spaces" to be true, so a fixture diff there is this.
+
+**The word mark inverts the crop's pixels, never a fresh capture of the screen**
+(SPEC §16.4). The mark covers the word it marks and consecutive words overlap once the 5px
+bleed is added, so capturing at each word would re-capture the previous mark and invert it
+twice — a strip of untouched pixels at the leading edge of every word. `HighlightOverlay`
+therefore keeps its own inverted copy of the crop, handed over by `SetSource`; it also
+outlives the crop, which a replay needs. `WS_EX_TRANSPARENT` became load-bearing with it:
+the window really does cover the word now, so it is the only thing letting clicks through.
 
 **Three separate things each silently switch the mark off, and every other check still
 passes** (SPEC §16.4) — which is why `--read-local` exists. `IncludeWordBoundaryMetadata`
